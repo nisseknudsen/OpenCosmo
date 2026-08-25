@@ -1,3 +1,4 @@
+use crate::flow::Score;
 use crate::level::CurrentLevel;
 use bevy::prelude::*;
 
@@ -14,7 +15,7 @@ pub fn spawn_hud(commands: &mut Commands) {
         })
         .with_children(|parent| {
             parent.spawn((
-                Text::new("Level: -"),
+                Text::new("Level: -  Score: 0"),
                 TextFont {
                     font_size: 16.0,
                     ..default()
@@ -25,11 +26,15 @@ pub fn spawn_hud(commands: &mut Commands) {
         });
 }
 
-pub fn update_hud(level: Res<CurrentLevel>, mut query: Query<&mut Text, With<LevelLabel>>) {
-    if !level.is_changed() {
+pub fn update_hud(
+    level: Res<CurrentLevel>,
+    score: Res<Score>,
+    mut query: Query<&mut Text, With<LevelLabel>>,
+) {
+    if !level.is_changed() && !score.is_changed() {
         return;
     }
     for mut text in &mut query {
-        text.0 = format!("Level: {}", level.name);
+        text.0 = format!("Level: {}  Score: {}", level.name, score.0);
     }
 }

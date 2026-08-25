@@ -18,6 +18,27 @@ pub struct ExitTrigger {
     pub y: i32,
 }
 
+#[derive(Component)]
+pub struct Collectible {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// `ACT_*` ids for the plain food/gem pickups (excludes their BASKET_*/
+/// BARREL_* container variants and animated slime hazards). From actor.h:
+/// ACT_STAR_FLOAT=1, ACT_GRN_TOMATO=32, ACT_RED_TOMATO=34, ACT_GRN_GOURD=135,
+/// ACT_POD=137, ACT_RED_BERRIES=141, ACT_BLU_CRYSTAL=154,
+/// ACT_RED_CRYSTAL_FLOOR=155, ACT_GRN_TOMATO_FLOAT=159,
+/// ACT_RED_TOMATO_FLOAT=160, ACT_REDGRN_BERRIES=170, ACT_RED_GOURD=172,
+/// ACT_CLR_DIAMOND=176, ACT_CYA_DIAMOND=194, ACT_RED_DIAMOND=196,
+/// ACT_CYA_DIAMOND_FLOAT=213, ACT_RED_DIAMOND_FLOAT=214,
+/// ACT_RED_LEAFY_FLOAT=225, ACT_RED_LEAFY=226, ACT_RED_CRYSTAL_CEIL=252,
+/// ACT_STAR=264.
+pub const COLLECTIBLE_ACT_IDS: [u16; 21] = [
+    1, 32, 34, 135, 137, 141, 154, 155, 159, 160, 170, 172, 176, 194, 196, 213, 214, 225, 226,
+    252, 264,
+];
+
 /// `ACT_*` ids (map_type - 31) that end a level on player contact
 /// (actor.h: ACT_EXIT_MONSTER_W=149, ACT_EXIT_MONSTER_N=247,
 /// ACT_EXIT_PLANT=186, ACT_EXIT_TRANSPORTER=203).
@@ -60,6 +81,12 @@ pub fn spawn_level_actors(
         ));
         if EXIT_ACT_IDS.contains(&act_type) {
             entity.insert(ExitTrigger {
+                x: a.x as i32,
+                y: a.y as i32,
+            });
+        }
+        if COLLECTIBLE_ACT_IDS.contains(&act_type) {
+            entity.insert(Collectible {
                 x: a.x as i32,
                 y: a.y as i32,
             });

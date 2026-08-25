@@ -4,12 +4,32 @@
 //! actual pattern from episode1.h's MAP_NAMES, truncated to whichever A*
 //! levels this installer's data actually shipped - see docs/file-formats.md).
 
-use crate::actors::{self, ExitTrigger};
+use crate::actors::{self, Collectible, ExitTrigger};
 use crate::data::GameData;
 use crate::level::{self, CurrentLevel, LevelScoped};
 use crate::player::Player;
 use crate::tileset::TilesetAssets;
 use bevy::prelude::*;
+
+#[derive(Resource, Default)]
+pub struct Score(pub u32);
+
+pub fn collect_pickups(
+    mut commands: Commands,
+    mut score: ResMut<Score>,
+    player_q: Query<&Player>,
+    pickup_q: Query<(Entity, &Collectible)>,
+) {
+    let Ok(player) = player_q.single() else {
+        return;
+    };
+    for (entity, c) in &pickup_q {
+        if (c.x - player.x).abs() <= 2 && (c.y - player.y).abs() <= 3 {
+            commands.entity(entity).despawn();
+            score.0 += 100;
+        }
+    }
+}
 
 #[derive(Resource)]
 pub struct LevelSequence {

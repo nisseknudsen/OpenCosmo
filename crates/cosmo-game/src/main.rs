@@ -35,12 +35,14 @@ fn main() {
         )
         .insert_resource(Time::<Fixed>::from_hz(18.2))
         .init_resource::<PlayerInput>()
+        .init_resource::<flow::Score>()
         .add_systems(Startup, setup)
         .add_systems(
             FixedUpdate,
             (
                 player::read_input,
                 player::move_player_tick,
+                flow::collect_pickups,
                 flow::check_level_exit,
                 player::animate_player,
             )
