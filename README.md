@@ -14,15 +14,27 @@ from source.
   ramp-up, wall-cling, and collision — running on an 18.2Hz fixed tick
   matching the DOS timer rate the original used.
 - Actors (enemies, items, decorations) render at their authored positions
-  using the real decoded sprites.
+  using the correct sprite for each type — `ACT_*` (map actor type) and
+  `SPR_*` (the sprite actually drawn) are different numbering spaces that
+  only sometimes coincide, resolved via `actor_sprite_map.rs`.
+- Collectibles (food/gems, a curated list of `ACT_*` ids) add to score on
+  contact and despawn. A curated hazard subset damages the player on
+  contact (health starts at 4, matching the original) and a "walker"
+  subset of those patrols left/right, reversing at walls/ledges — this is
+  a pragmatic generic pass, *not* a per-type port of each actor's real
+  behavior function (`ActXxx` in game1.c; there are ~250 of them).
+- Original AdLib music plays per-level (decoded IMF → OPL2 synthesis →
+  looped WAV playback), matched to each level via the real per-level
+  track assignment (packed into the level header's flags word).
 - Touching a level's exit actor advances to the next stage in the real
   `A1 A2 bonus1 bonus2 A3 A4 …` progression.
-- Not yet implemented: enemy AI/animation, collision/damage against actors,
-  collectibles & scoring, health/lives, true half-rate parallax scrolling
-  (backdrops currently tile statically), and Episodes 2–3 (same pipeline,
-  just needs `COSMO2`/`COSMO3` wired up the same way as `COSMO1`).
-- Audio: see `docs/file-formats.md` for what's confirmed about the format;
-  implementation status may have moved past this README, check `crates/cosmo-assets/src/music.rs` if present.
+- Not yet implemented: per-type enemy AI/animation (projectiles, switches,
+  doors, moving platforms, etc. all render but don't act), lives/game-over,
+  sound effects (PC-speaker `SND_*`, separate from the AdLib music), true
+  half-rate parallax scrolling (backdrops currently tile statically), a
+  title/menu screen (the game drops straight into gameplay), and Episodes
+  2–3 (same pipeline, just needs `COSMO2`/`COSMO3` wired up the same way
+  as `COSMO1`).
 
 ## Building & running
 
