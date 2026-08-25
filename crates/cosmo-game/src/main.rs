@@ -1,7 +1,9 @@
 mod actors;
 mod audio;
 mod camera;
+mod combat;
 mod data;
+mod effects;
 mod enemy;
 mod enemy_ai;
 mod flow;
@@ -77,7 +79,17 @@ fn main() {
                 // Runs before hazard_damage so contact tests see this
                 // tick's positions rather than the previous one's.
                 enemy_ai::tick_enemies,
+                // Pounce resolves before contact damage so landing on an
+                // enemy kills it instead of hurting the player.
+                combat::pounce_enemies,
                 enemy::hazard_damage,
+                combat::collect_bombs,
+                combat::place_bomb,
+                combat::tick_bombs,
+                effects::tick_explosions,
+                combat::explosion_damage,
+                effects::tick_decorations,
+                effects::tick_score_effects,
                 player::update_death,
                 flow::collect_pickups,
                 flow::smash_containers,
@@ -163,10 +175,26 @@ fn setup_game(
     .expect("start level missing from generated assets");
 
     let level_json = data.load_level(&start_level).unwrap();
-    let (start_x, start_y) = level::find_player_start(&level_json);
+    // COSMO_SPAWN=x,y overrides the level's own start point, which is how
+    // situational behaviour (landing on a particular enemy, say) gets
+    // exercised deterministically instead of hoping a playthrough wanders
+    // into it.
+    let (start_x, start_y) = std::env::var("COSMO_SPAWN")
+        .ok()
+        .and_then(|v| {
+            let (x, y) = v.split_once(',')?;
+            Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+        })
+        .unwrap_or_else(|| level::find_player_start(&level_json));
     let player_frames = PlayerFrames::load(&asset_server, &data);
+    let mut player = Player::spawn_at(start_x as i32, start_y as i32);
+    // COSMO_GIVE_BOMBS stocks the bomb counter up front, so the bomb path
+    // can be exercised without first hunting down a bomb pickup.
+    if let Ok(n) = std::env::var("COSMO_GIVE_BOMBS") {
+        player.bombs = n.trim().parse().unwrap_or(0);
+    }
     commands.spawn((
-        Player::spawn_at(start_x as i32, start_y as i32),
+        player,
         Sprite {
             image: player_frames.0.first().cloned().unwrap_or_default(),
             ..default()
@@ -177,6 +205,7 @@ fn setup_game(
     commands.insert_resource(LevelSequence::build(&data, &start_level));
     commands.insert_resource(current_level);
     commands.insert_resource(tileset_assets);
+    commands.insert_resource(effects::EffectAssets::load(&asset_server, &data));
 
     hud::spawn_hud(
         &mut commands,

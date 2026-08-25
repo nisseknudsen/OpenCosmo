@@ -54,13 +54,16 @@ pub struct Player {
     /// floating upward), counting ticks - mirrors playerDeadTime
     /// (game1.c:9230-9256), which respawns once it passes 36.
     pub dead_timer: u32,
-    /// Shown in the status bar's "Bombs" field. Bomb placement itself
-    /// (MovePlayer's cmdBomb branch, game1.c:8497-8546) isn't ported yet,
-    /// so this currently only ever reads 0.
+    /// Shown in the status bar's "Bombs" field; stocked by collecting
+    /// ACT_BOMB_IDLE and spent by `combat::place_bomb`.
     pub bombs: u32,
     /// How many health cells the meter shows - `playerHealthCells`, which
     /// starts at 3 (game1.c:10581) and grows with power-ups.
     pub health_cells: u32,
+    /// `playerRecoilLeft` / `isPlayerRecoiling` - the springy upward bounce
+    /// a successful pounce launches the player into (game1.c:8698-8721).
+    pub recoil_left: i32,
+    pub is_recoiling: bool,
 }
 
 impl Player {
@@ -83,7 +86,28 @@ impl Player {
             dead_timer: 0,
             bombs: 0,
             health_cells: 3,
+            recoil_left: 0,
+            is_recoiling: false,
         }
+    }
+
+    /// `TryPounce` (game1.c:6844-6895), minus the dizzy/streak bookkeeping
+    /// this remake hasn't ported. Succeeds only while descending - either
+    /// genuinely falling, or past the jump curve's apex - and refuses to
+    /// re-trigger mid-bounce.
+    pub fn try_pounce(&mut self, recoil: i32) -> bool {
+        if self.dead_timer != 0 {
+            return false;
+        }
+        let descending = self.is_falling || self.jump_time > 6;
+        if (self.is_recoiling && self.recoil_left >= 2) || !descending {
+            return false;
+        }
+        self.recoil_left = recoil + 1;
+        self.is_recoiling = true;
+        self.is_falling = false;
+        self.fall_time = 0;
+        true
     }
 }
 
@@ -94,6 +118,7 @@ pub struct PlayerInput {
     pub jump: bool,
     pub look_up: bool,
     pub look_down: bool,
+    pub bomb: bool,
 }
 
 pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>, time: Res<Time>) {
@@ -101,6 +126,7 @@ pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput
         input.west = false;
         input.east = true;
         input.jump = (time.elapsed_secs() as u32) % 2 == 0;
+        input.bomb = (time.elapsed_secs() as u32) % 3 == 0;
         return;
     }
     input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
@@ -108,6 +134,9 @@ pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput
     input.jump = keys.pressed(KeyCode::Space);
     input.look_up = keys.pressed(KeyCode::ArrowUp) || keys.pressed(KeyCode::KeyW);
     input.look_down = keys.pressed(KeyCode::ArrowDown) || keys.pressed(KeyCode::KeyS);
+    // The original binds bomb to Alt, next to its Ctrl jump; Space took
+    // jump here, so Ctrl is free for bombs.
+    input.bomb = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 }
 
 fn attr_at(level: &crate::data::LevelJson, data: &GameData, x: i32, y: i32) -> u8 {
@@ -279,25 +308,58 @@ pub fn move_player_tick(
         p.cmd_jump_latch = false;
     }
 
-    // --- Jump initiation / continuation ---
-    let jumping_now = (input.jump && !p.is_falling && !p.cmd_jump_latch)
+    // --- Jump / recoil ---
+    // A pounce puts the player into recoil, which drives the same upward
+    // branch a jump does - hence the shared condition (game1.c:8691-8695).
+    let jumping_now = p.recoil_left != 0
+        || (input.jump && !p.is_falling && !p.cmd_jump_latch)
         || (p.cling_dir.is_some() && input.jump && !p.cmd_jump_latch);
     if jumping_now {
-        if p.cling_dir == Some(FaceDir::West) && input.west {
-            p.cling_dir = None;
-        }
-        if p.cling_dir == Some(FaceDir::East) && input.east {
-            p.cling_dir = None;
-        }
-        if p.cling_dir.is_none() {
-            let jt = (p.jump_time as usize).min(JUMP_TABLE.len() - 1);
-            p.y = (p.y as i32 + JUMP_TABLE[jt]).max(0);
+        let mut new_jump = true;
+
+        if p.is_recoiling && p.recoil_left > 0 {
+            // Recoil bounce (game1.c:8698-8721). It rises faster than a
+            // jump while the counter is high, giving a pounce its
+            // characteristic springy launch.
+            p.recoil_left -= 1;
+            if p.recoil_left > 1 {
+                p.y -= 1;
+            }
+            if p.recoil_left > 13 {
+                p.recoil_left -= 1;
+                if test_move(Direction::North, p.x, p.y, &level, &data, &mut dummy_cling)
+                    == MoveResult::Free
+                {
+                    p.y -= 1;
+                }
+            }
+            new_jump = false;
+            if p.recoil_left == 0 {
+                p.jump_time = 0;
+                p.is_recoiling = false;
+                p.fall_time = 0;
+                p.cmd_jump_latch = true;
+            }
+        } else {
+            if p.cling_dir == Some(FaceDir::West) && input.west {
+                p.cling_dir = None;
+            }
+            if p.cling_dir == Some(FaceDir::East) && input.east {
+                p.cling_dir = None;
+            }
+            if p.cling_dir.is_none() {
+                let jt = (p.jump_time as usize).min(JUMP_TABLE.len() - 1);
+                p.y = (p.y + JUMP_TABLE[jt]).max(0);
+            }
+            p.is_recoiling = false;
         }
         p.cling_dir = None;
 
         if test_move(Direction::North, p.x, p.y, &level, &data, &mut dummy_cling)
             != MoveResult::Free
         {
+            p.recoil_left = 0;
+            p.is_recoiling = false;
             p.y += 1;
             p.is_falling = true;
             if input.jump {
@@ -305,14 +367,16 @@ pub fn move_player_tick(
             }
             p.fall_time = 0;
         }
-        if p.jump_time + 1 > 6 {
+        if !p.is_recoiling && p.jump_time + 1 > 6 {
             p.is_falling = true;
             if input.jump {
                 p.cmd_jump_latch = true;
             }
             p.fall_time = 0;
         }
-        p.jump_time += 1;
+        if new_jump || !p.is_recoiling {
+            p.jump_time += 1;
+        }
     }
 
     // --- Gravity / falling ---
@@ -325,7 +389,8 @@ pub fn move_player_tick(
             p.fall_time = 0;
         }
         p.on_ground = false;
-        if p.is_falling {
+        // Recoil owns vertical motion while it lasts (game1.c:8784).
+        if p.is_falling && !p.is_recoiling {
             p.y += 1;
             if test_move(Direction::South, p.x, p.y, &level, &data, &mut dummy_cling)
                 != MoveResult::Free

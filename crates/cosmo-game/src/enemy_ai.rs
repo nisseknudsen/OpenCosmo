@@ -60,6 +60,29 @@ pub enum EnemyKind {
     Pyramid,
 }
 
+impl EnemyKind {
+    /// Whether landing on this actor pounces it.
+    ///
+    /// The original decides per sprite type in the big `switch` at
+    /// game1.c:7094+ - only creatures call `TryPounce`. Prizes are
+    /// collectibles you pass through, and the spikes/spears/clam plant
+    /// hurt on contact rather than yielding to a stomp; the pyramid and
+    /// falling floor are scenery.
+    pub fn is_pounceable(self) -> bool {
+        matches!(
+            self,
+            EnemyKind::RoamerSlug
+                | EnemyKind::RedChomper
+                | EnemyKind::PinkWorm
+                | EnemyKind::Cabbage
+                | EnemyKind::ParachuteBall
+                | EnemyKind::Ghost
+                | EnemyKind::Bird
+                | EnemyKind::SuctionWalker
+        )
+    }
+}
+
 /// Ported behavior + starting `data1..data5` for each ACT_* id, taken from
 /// that type's `ConstructActor(...)` call in `NewActorAtIndex()`.
 ///

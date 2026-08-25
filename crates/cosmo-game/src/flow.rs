@@ -29,6 +29,9 @@ pub fn collect_pickups(
         return;
     };
     for (entity, c) in &pickup_q {
+        if c.act_id == crate::combat::ACT_BOMB_IDLE {
+            continue; // stocked by combat::collect_bombs, not scored
+        }
         if (c.x - player.x).abs() <= 2 && (c.y - player.y).abs() <= 3 {
             commands.entity(entity).despawn();
             if actors::STAR_ACT_IDS.contains(&c.act_id) {

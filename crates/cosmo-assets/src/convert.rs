@@ -17,6 +17,15 @@ pub const STATUS_H_TILES: usize = 6;
 /// Font atlas is 100 masked tiles; 10 per row keeps digit rows aligned
 /// (digits are font tiles 26..35, i.e. FONT_0 = byte offset 0x0410 / 40).
 pub const FONT_ATLAS_COLS: u32 = 10;
+
+/// `SPR_*` ids that no map actor spawns directly, so they'd never be picked
+/// up by scanning the levels - but the game creates them at runtime for
+/// explosions, pounce debris, bombs and score pop-ups. From sprite.h:
+/// SPARKLE_SHORT=15, POUNCE_DEBRIS=21, SPARKLE_LONG=23, BOMB_ARMED=24,
+/// EXPLOSION=26, SMOKE=97, SMOKE_LARGE=98, SCORE_EFFECT_100..12800=177..184.
+pub const EFFECT_SPRITES: &[u16] = &[
+    15, 21, 23, 24, 26, 97, 98, 177, 178, 179, 180, 181, 182, 183, 184,
+];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
 const MUSIC_SAMPLE_RATE: u32 = 44100;
@@ -343,6 +352,9 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
             }
         }
     }
+    used_sprites.extend_from_slice(EFFECT_SPRITES);
+    used_sprites.sort_unstable();
+    used_sprites.dedup();
     used_sprites.retain(|&t| (t as usize) < actrinfo.len() && (t as usize) < MAX_ACTOR_TYPES);
 
     let actors_dir = out_dir.join("sprites/actors");
