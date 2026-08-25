@@ -21,7 +21,32 @@ pub struct Level {
     /// plain tile index; a raw value >= MASKED_TILE_THRESHOLD is a masked
     /// tile, indexed as `(raw - MASKED_TILE_THRESHOLD) / 8`.
     pub tiles: Vec<u16>,
+    pub backdrop_num: u16,
+    pub music_num: u16,
+    pub has_rain: bool,
+    pub has_h_scroll_backdrop: bool,
+    pub has_v_scroll_backdrop: bool,
+    pub palette_animation_num: u8,
 }
+
+/// Backdrop names as indexed by `backdrop_num` (game1.c:111-118). Not every
+/// index is present in every episode's data files.
+pub const BACKDROP_NAMES: [&str; 26] = [
+    "bdblank.mni", "bdpipe.mni", "bdredsky.mni", "bdrocktk.mni", "bdjungle.mni",
+    "bdstar.mni", "bdwierd.mni", "bdcave.mni", "bdice.mni", "bdshrum.mni",
+    "bdtechms.mni", "bdnewsky.mni", "bdstar2.mni", "bdstar3.mni",
+    "bdforest.mni", "bdmountn.mni", "bdguts.mni", "bdbrktec.mni",
+    "bdclouds.mni", "bdfutcty.mni", "bdice2.mni", "bdcliff.mni", "bdspooky.mni",
+    "bdcrystl.mni", "bdcircut.mni", "bdcircpc.mni",
+];
+
+/// Music names as indexed by `music_num` (game1.c:120-125).
+pub const MUSIC_NAMES: [&str; 19] = [
+    "mcaves.mni", "mscarry.mni", "mboss.mni", "mrunaway.mni", "mcircus.mni",
+    "mtekwrd.mni", "measylev.mni", "mrockit.mni", "mhappy.mni", "mdevo.mni",
+    "mdadoda.mni", "mbells.mni", "mdrums.mni", "mbanjo.mni", "measy2.mni",
+    "mteck2.mni", "mteck3.mni", "mteck4.mni", "mzztop.mni",
+];
 
 fn read_u16le(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
@@ -29,6 +54,7 @@ fn read_u16le(bytes: &[u8], offset: usize) -> u16 {
 
 pub fn parse(bytes: &[u8]) -> Result<Level> {
     ensure!(bytes.len() >= 6, "level file too short for header");
+    let map_variables = read_u16le(bytes, 0);
     let width = read_u16le(bytes, 2) as usize;
     ensure!(width.is_power_of_two(), "map width {width} is not a power of two");
     let actor_word_count = read_u16le(bytes, 4) as usize;
@@ -68,5 +94,11 @@ pub fn parse(bytes: &[u8]) -> Result<Level> {
         height,
         actors,
         tiles,
+        backdrop_num: map_variables & 0x001f,
+        has_rain: map_variables & 0x0020 != 0,
+        has_h_scroll_backdrop: map_variables & 0x0040 != 0,
+        has_v_scroll_backdrop: map_variables & 0x0080 != 0,
+        palette_animation_num: ((map_variables >> 8) & 0x07) as u8,
+        music_num: (map_variables >> 11) & 0x001f,
     })
 }

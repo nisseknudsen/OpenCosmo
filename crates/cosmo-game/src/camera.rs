@@ -37,19 +37,21 @@ pub fn follow_player(
     let target_x = (player.x as f32 + 1.5) * TILE_PX;
     let target_y = -(player.y as f32 - 2.0) * TILE_PX;
 
-    let level_w = level.width as f32 * TILE_PX;
-    let level_h = level.height as f32 * TILE_PX;
+    let min_x = level.content_min.0 as f32 * TILE_PX;
+    let max_x = level.content_max.0 as f32 * TILE_PX;
+    let min_y = -(level.content_max.1 as f32) * TILE_PX;
+    let max_y = -(level.content_min.1 as f32) * TILE_PX;
     let half_view_w = 160.0; // ~38 tiles at 8px, half-width
     let half_view_h = 90.0;
 
-    cam_t.translation.x = if level_w > half_view_w * 2.0 {
-        target_x.clamp(half_view_w, level_w - half_view_w)
+    cam_t.translation.x = if max_x - min_x > half_view_w * 2.0 {
+        target_x.clamp(min_x + half_view_w, max_x - half_view_w)
     } else {
-        level_w / 2.0
+        (min_x + max_x) / 2.0
     };
-    cam_t.translation.y = if level_h > half_view_h * 2.0 {
-        target_y.clamp(-(level_h - half_view_h), -half_view_h)
+    cam_t.translation.y = if max_y - min_y > half_view_h * 2.0 {
+        target_y.clamp(min_y + half_view_h, max_y - half_view_h)
     } else {
-        -level_h / 2.0
+        (min_y + max_y) / 2.0
     };
 }

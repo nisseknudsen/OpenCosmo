@@ -31,6 +31,10 @@ pub struct LevelJson {
     pub height: usize,
     pub tiles: Vec<u16>,
     pub actors: Vec<LevelActorJson>,
+    pub backdrop: Option<String>,
+    pub music: Option<String>,
+    pub has_h_scroll_backdrop: bool,
+    pub has_v_scroll_backdrop: bool,
 }
 
 impl LevelJson {

@@ -20,6 +20,10 @@ struct LevelJson {
     height: usize,
     tiles: Vec<u16>,
     actors: Vec<ActorJson>,
+    backdrop: Option<String>,
+    music: Option<String>,
+    has_h_scroll_backdrop: bool,
+    has_v_scroll_backdrop: bool,
 }
 
 #[derive(Serialize)]
@@ -165,6 +169,12 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
             .get(&name.to_ascii_uppercase())
             .expect("name came from this map");
         let lvl = level::parse(data).with_context(|| format!("parsing level {name}"))?;
+        let backdrop = level::BACKDROP_NAMES
+            .get(lvl.backdrop_num as usize)
+            .map(|n| n.trim_end_matches(".mni").to_string());
+        let music = level::MUSIC_NAMES
+            .get(lvl.music_num as usize)
+            .map(|n| n.trim_end_matches(".mni").to_string());
         let json = LevelJson {
             name: name.to_string(),
             width: lvl.width,
@@ -179,6 +189,10 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
                     y: a.y,
                 })
                 .collect(),
+            backdrop,
+            music,
+            has_h_scroll_backdrop: lvl.has_h_scroll_backdrop,
+            has_v_scroll_backdrop: lvl.has_v_scroll_backdrop,
         };
         let stem = name.trim_end_matches(".MNI").trim_end_matches(".mni");
         std::fs::write(

@@ -1,5 +1,8 @@
+mod actors;
 mod camera;
 mod data;
+mod flow;
+mod hud;
 mod level;
 mod player;
 mod tileset;
@@ -7,9 +10,8 @@ mod tileset;
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use data::GameData;
-use level::CurrentLevel;
+use flow::LevelSequence;
 use player::{Player, PlayerFrames, PlayerInput};
-use tileset::TilesetAssets;
 
 const START_LEVEL: &str = "a1";
 
@@ -39,6 +41,7 @@ fn main() {
             (
                 player::read_input,
                 player::move_player_tick,
+                flow::check_level_exit,
                 player::animate_player,
             )
                 .chain(),
@@ -49,6 +52,7 @@ fn main() {
                 player::apply_player_frame,
                 player::sync_transform,
                 camera::follow_player,
+                hud::update_hud,
             )
                 .chain(),
         )
@@ -63,14 +67,14 @@ fn setup(
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     let data = GameData::load(&assets_dir);
 
-    let level = data
-        .load_level(START_LEVEL)
-        .expect("start level missing from generated assets");
-
+    let start_level = std::env::var("COSMO_LEVEL").unwrap_or_else(|_| START_LEVEL.to_string());
     let tileset_assets = tileset::load_tileset(&asset_server, &mut layouts, &data);
-    level::spawn_level_tiles(&mut commands, &tileset_assets, &level, &data);
+    let current_level =
+        flow::load_level_into_world(&mut commands, &asset_server, &data, &tileset_assets, &start_level)
+            .expect("start level missing from generated assets");
 
-    let (start_x, start_y) = level::find_player_start(&level);
+    let level_json = data.load_level(&start_level).unwrap();
+    let (start_x, start_y) = level::find_player_start(&level_json);
     let player_frames = PlayerFrames::load(&asset_server, &data);
     commands.spawn((
         Player::spawn_at(start_x as i32, start_y as i32),
@@ -81,14 +85,11 @@ fn setup(
         Transform::default(),
     ));
     commands.insert_resource(player_frames);
-
-    commands.insert_resource(CurrentLevel {
-        name: START_LEVEL.to_string(),
-        width: level.width,
-        height: level.height,
-    });
+    commands.insert_resource(LevelSequence::build(&data, &start_level));
+    commands.insert_resource(current_level);
     commands.insert_resource(tileset_assets);
     commands.insert_resource(data);
 
+    hud::spawn_hud(&mut commands);
     camera::spawn_camera(commands);
 }

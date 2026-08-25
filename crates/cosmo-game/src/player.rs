@@ -71,11 +71,11 @@ pub struct PlayerInput {
     pub jump: bool,
 }
 
-pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>) {
+pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>, time: Res<Time>) {
     if std::env::var("COSMO_AUTOPLAY").is_ok() {
         input.west = false;
         input.east = true;
-        input.jump = false;
+        input.jump = (time.elapsed_secs() as u32) % 2 == 0;
         return;
     }
     input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
@@ -318,6 +318,20 @@ pub fn move_player_tick(
                 p.fall_time += 1;
             }
         }
+    }
+
+    // Safety net: nothing in TestPlayerMove bounds a fall below the map
+    // buffer or a bottomless hazard (e.g. deep water with no BLOCK_SOUTH
+    // tiles), so without this the player can fall forever. Respawn at the
+    // level's start once clearly past the bottom of the playable content.
+    if p.y as i64 > level_data.content_max.1 as i64 + 20 {
+        let (sx, sy) = crate::level::find_player_start(&level);
+        p.x = sx as i32;
+        p.y = sy as i32;
+        p.is_falling = true;
+        p.jump_time = 0;
+        p.fall_time = 0;
+        p.cling_dir = None;
     }
 }
 
