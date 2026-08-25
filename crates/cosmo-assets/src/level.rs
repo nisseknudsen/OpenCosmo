@@ -19,7 +19,15 @@ pub struct Level {
     pub actors: Vec<MapActor>,
     /// Row-major, `width * height` raw cell values. Divide by 8 to get a
     /// plain tile index; a raw value >= MASKED_TILE_THRESHOLD is a masked
-    /// tile, indexed as `(raw - MASKED_TILE_THRESHOLD) / 8`.
+    /// tile, indexed as `(raw - MASKED_TILE_THRESHOLD) / 40` - masked tiles
+    /// are addressed as a direct byte offset into MASKTILE.MNI (confirmed
+    /// via `DrawMaskedTile(maskedTileData + *mapcell, ...)`,
+    /// game1.c:896-897, `localsrc = src - 16000` in the low-level draw
+    /// routine), NOT the tile_index*8 EGA-VRAM-address scheme solid tiles
+    /// use - each masked tile is 40 bytes, so the byte-offset divisor is
+    /// 40, not 8. (Tile *attribute* lookups are a separate, unrelated
+    /// indexing scheme: `tileAttributeData[raw_value / 8]` uniformly for
+    /// both solid and masked values - see game1.c:247-254.)
     pub tiles: Vec<u16>,
     pub backdrop_num: u16,
     pub music_num: u16,

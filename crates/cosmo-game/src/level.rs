@@ -70,12 +70,20 @@ pub fn spawn_level_tiles(
     for y in 0..level.height {
         for x in 0..level.width {
             let raw = level.tile_at(x, y);
-            if raw == 0 {
+            // Values below TILE_STRIPED_PLATFORM (80) are "air" or a
+            // platform-direction command, not a real graphic - the
+            // original just shows backdrop through them (game1.c:889:
+            // `if (*mapcell < TILE_STRIPED_PLATFORM) { ...just backdrop... }`).
+            if raw < 80 {
                 continue;
             }
             let pos = tile_topleft_to_center(x as f32, y as f32, TILE_PX, TILE_PX);
             let (image, layout, index) = if raw >= MASKED_TILE_THRESHOLD {
-                let idx = ((raw - MASKED_TILE_THRESHOLD) / 8) as usize;
+                // Masked tiles are addressed as a direct byte offset into
+                // MASKTILE.MNI (40 bytes/tile), not the tile_index*8
+                // EGA-VRAM scheme solid tiles use - see level.rs's doc
+                // comment on MASKED_TILE_THRESHOLD for the source citation.
+                let idx = ((raw - MASKED_TILE_THRESHOLD) / 40) as usize;
                 (tileset.masked_image.clone(), tileset.masked_layout.clone(), idx)
             } else {
                 let idx = (raw / 8) as usize;

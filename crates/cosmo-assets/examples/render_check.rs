@@ -187,10 +187,10 @@ fn render_level(
     for y in 0..level.height {
         for x in 0..level.width {
             let raw = level.tiles[y * level.width + x];
-            let tile: Option<&[[u8; 4]; 64]> = if raw == 0 {
+            let tile: Option<&[[u8; 4]; 64]> = if raw < 80 {
                 None
             } else if raw >= cosmo_assets::level::MASKED_TILE_THRESHOLD {
-                let idx = ((raw - cosmo_assets::level::MASKED_TILE_THRESHOLD) / 8) as usize;
+                let idx = ((raw - cosmo_assets::level::MASKED_TILE_THRESHOLD) / 40) as usize;
                 masked.get(idx)
             } else {
                 let idx = (raw / 8) as usize;

@@ -91,11 +91,13 @@ impl GameData {
         if raw_value == 0 {
             return 0;
         }
-        let index = if raw_value >= MASKED_TILE_THRESHOLD {
-            (raw_value - MASKED_TILE_THRESHOLD) / 8 + self.tileset.solid_tile_count as u16
-        } else {
-            raw_value / 8
-        };
+        // Attribute lookup is a single uniform formula for both solid and
+        // masked values - no threshold branching, unlike the graphic index
+        // (game1.c:247-254: `tileAttributeData[raw_value / 8]`). This is a
+        // *different* indexing scheme than the masked-tile graphic lookup
+        // (which is `(raw - 16000) / 40`, a direct byte offset into
+        // MASKTILE.MNI) - don't conflate the two.
+        let index = raw_value / 8;
         self.tile_attrs
             .get(index as usize)
             .copied()
