@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/cosmo-assets", "crates/cosmo-game"]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+publish = false
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

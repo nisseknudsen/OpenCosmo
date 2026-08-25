@@ -1,0 +1,5 @@
+/target
+/extracted
+/original
+/crates/cosmo-game/assets/generated
+*.swp

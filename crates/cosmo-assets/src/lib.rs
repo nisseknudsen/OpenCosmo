@@ -1,0 +1,12 @@
+pub mod cache;
+pub mod level;
+pub mod palette;
+pub mod shell;
+pub mod tile;
+pub mod vol;
+
+pub mod episode {
+    /// The three episode short-names as they appear in file names
+    /// (COSMO1.VOL, COSMO2.VOL, COSMO3.VOL, ...).
+    pub const ALL: [&str; 3] = ["COSMO1", "COSMO2", "COSMO3"];
+}
