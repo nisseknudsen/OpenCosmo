@@ -60,6 +60,8 @@ fn main() {
             (
                 player::apply_player_frame,
                 player::sync_transform,
+                actors::animate_sprites,
+                actors::track_player,
                 camera::follow_player,
                 level::scroll_backdrop,
                 hud::update_hud,

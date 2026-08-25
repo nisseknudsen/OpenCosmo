@@ -426,6 +426,7 @@ mod frame {
     pub const FALL: usize = 8;
     pub const CLING: usize = 9;
     pub const FALL_LONG: usize = 13;
+    pub const PAIN: usize = 15;
     /// Shared by both facings, not offset by `base` - PLAYER_DEAD_1/2 = 46/47.
     pub const DEAD_1: usize = 46;
 }
@@ -450,6 +451,14 @@ pub fn animate_player(
         FaceDir::West => 0,
         FaceDir::East => 23,
     };
+    if p.hurt_cooldown > 40 {
+        // The "ouch" pose: shown only for the first 4 of the 44
+        // invincibility-cooldown ticks (game1.c:9214-9218) - the original
+        // also flashes it solid white for exactly the very first tick,
+        // which we don't replicate (no white draw-mode), just the pose.
+        p.frame = base + frame::PAIN;
+        return;
+    }
     let moving = (input.west || input.east) && p.on_ground && p.cling_dir.is_none();
     let local = if p.cling_dir.is_some() {
         frame::CLING

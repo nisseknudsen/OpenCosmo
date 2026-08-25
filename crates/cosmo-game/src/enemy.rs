@@ -15,14 +15,19 @@ use crate::level::{tile_topleft_to_center, CurrentLevel};
 use crate::player::Player;
 use bevy::prelude::*;
 
-/// ACT_* ids (map_type - 31) that hurt the player on contact.
+/// ACT_* ids (map_type - 31) that hurt the player on contact. Excludes
+/// ACT_EYE_PLANT_FLOOR/CEIL (95/96) and ACT_PINK_WORM/_SLIME (124/128) -
+/// user-reported as non-damaging on contact in the original (these read as
+/// "watcher" enemies, not touch hazards; eye-tracking behavior for the eye
+/// plants is still unimplemented, see the module doc).
 pub const HAZARD_ACT_IDS: &[u16] = &[
     17, 18, 20, 22, 24, 25, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 63, 65, 66, 67, 68,
-    69, 78, 80, 83, 84, 87, 88, 89, 90, 92, 95, 96, 101, 102, 106, 109, 110, 111, 112, 113, 118,
-    124, 126, 127, 128, 129, 151, 152, 162, 187, 233, 234, 236, 237, 251,
+    69, 78, 80, 83, 84, 87, 88, 89, 90, 92, 101, 102, 106, 109, 110, 111, 112, 113, 118, 126, 127,
+    129, 151, 152, 162, 187, 233, 234, 236, 237, 251,
 ];
 
-/// Subset of the above that patrols left/right instead of standing still.
+/// Patrols left/right instead of standing still - not strictly a subset of
+/// HAZARD_ACT_IDS (e.g. the pink worm walks but doesn't damage on touch).
 pub const WALKER_ACT_IDS: &[u16] = &[
     25, 42, 43, 51, 65, 69, 78, 80, 101, 106, 118, 124, 126, 127, 128, 129, 187, 236, 237, 251,
 ];
