@@ -94,7 +94,9 @@ pub fn move_walkers(
         );
         t.translation.x = world.x;
         t.translation.y = world.y;
-        t.scale.x = w.dir as f32;
+        // Sprite art faces the *opposite* of its map/movement convention
+        // (mirrors the player's own PLAYER_BASE_WEST=0 default) - negate.
+        t.scale.x = -w.dir as f32;
     }
 }
 
@@ -102,12 +104,13 @@ pub fn hazard_damage(
     mut player_q: Query<&mut Player>,
     static_hazards: Query<&Transform, (With<Hazard>, Without<Walker>)>,
     walker_hazards: Query<(&Walker, &Transform), With<Hazard>>,
-    level_data: Res<CurrentLevel>,
-    data: Res<GameData>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
+    if player.dead_timer != 0 {
+        return;
+    }
     if player.hurt_cooldown > 0 {
         player.hurt_cooldown -= 1;
         return;
@@ -144,16 +147,6 @@ pub fn hazard_damage(
     player.health -= 1;
     player.hurt_cooldown = 44; // matches HurtPlayer()'s cooldown, game1.c:6927
     if player.health <= 0 {
-        let Some(level) = data.load_level(&level_data.name) else {
-            return;
-        };
-        let (sx, sy) = crate::level::find_player_start(&level);
-        player.x = sx as i32;
-        player.y = sy as i32;
-        player.is_falling = true;
-        player.jump_time = 0;
-        player.fall_time = 0;
-        player.cling_dir = None;
-        player.health = 4; // starting health, game1.c:10580
+        player.dead_timer = 1; // player::update_death() plays the animation and respawns
     }
 }

@@ -50,6 +50,10 @@ pub struct Player {
     /// Invincibility frames after taking damage - 44 ticks matches the
     /// original's HurtPlayer() (game1.c:6927).
     pub hurt_cooldown: u32,
+    /// 0 = alive. >0 = playing the death animation (PLAYER_DEAD_1/2,
+    /// floating upward), counting ticks - mirrors playerDeadTime
+    /// (game1.c:9230-9256), which respawns once it passes 36.
+    pub dead_timer: u32,
 }
 
 impl Player {
@@ -69,6 +73,7 @@ impl Player {
             on_ground: false,
             health: 4,
             hurt_cooldown: 0,
+            dead_timer: 0,
         }
     }
 }
@@ -78,6 +83,8 @@ pub struct PlayerInput {
     pub west: bool,
     pub east: bool,
     pub jump: bool,
+    pub look_up: bool,
+    pub look_down: bool,
 }
 
 pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>, time: Res<Time>) {
@@ -89,9 +96,9 @@ pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput
     }
     input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
     input.east = keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD);
-    input.jump = keys.pressed(KeyCode::Space)
-        || keys.pressed(KeyCode::ArrowUp)
-        || keys.pressed(KeyCode::KeyW);
+    input.jump = keys.pressed(KeyCode::Space);
+    input.look_up = keys.pressed(KeyCode::ArrowUp) || keys.pressed(KeyCode::KeyW);
+    input.look_down = keys.pressed(KeyCode::ArrowDown) || keys.pressed(KeyCode::KeyS);
 }
 
 fn attr_at(level: &crate::data::LevelJson, data: &GameData, x: i32, y: i32) -> u8 {
@@ -191,6 +198,9 @@ pub fn move_player_tick(
     let Ok(mut p) = query.single_mut() else {
         return;
     };
+    if p.dead_timer != 0 {
+        return; // frozen during the death animation, game1.c:8452
+    }
     let Some(level) = data.load_level(&level_data.name) else {
         return;
     };
@@ -352,6 +362,44 @@ pub fn move_player_tick(
     }
 }
 
+/// Plays the death animation (frozen movement, alternating DEAD frames,
+/// floating upward) then respawns at the level start - a simplified stand-in
+/// for the original's checkpoint-reload (`LoadGameState('T')`); we don't
+/// have a save-state system, so "checkpoint" is just "level start" here.
+/// Timing mirrors game1.c:9230-9256: ~10 ticks stationary, then floats up
+/// until tick 36 triggers the reload.
+pub fn update_death(
+    mut query: Query<&mut Player>,
+    level_data: Res<CurrentLevel>,
+    data: Res<GameData>,
+) {
+    let Ok(mut p) = query.single_mut() else {
+        return;
+    };
+    if p.dead_timer == 0 {
+        return;
+    }
+    p.dead_timer += 1;
+    if p.dead_timer > 10 {
+        p.y -= 1;
+    }
+    if p.dead_timer > 36 {
+        let Some(level) = data.load_level(&level_data.name) else {
+            return;
+        };
+        let (sx, sy) = crate::level::find_player_start(&level);
+        p.x = sx as i32;
+        p.y = sy as i32;
+        p.is_falling = true;
+        p.jump_time = 0;
+        p.fall_time = 0;
+        p.cling_dir = None;
+        p.health = 4;
+        p.hurt_cooldown = 0;
+        p.dead_timer = 0;
+    }
+}
+
 pub fn sync_transform(mut query: Query<(&Player, &mut Transform)>) {
     for (p, mut t) in &mut query {
         let top_row = p.y - (PLAYER_HEIGHT - 1);
@@ -372,10 +420,14 @@ pub fn sync_transform(mut query: Query<(&Player, &mut Transform)>) {
 mod frame {
     pub const WALK: [usize; 4] = [0, 1, 2, 3];
     pub const STAND: usize = 4;
+    pub const LOOK_NORTH: usize = 5;
+    pub const LOOK_SOUTH: usize = 6;
     pub const JUMP: usize = 7;
     pub const FALL: usize = 8;
     pub const CLING: usize = 9;
     pub const FALL_LONG: usize = 13;
+    /// Shared by both facings, not offset by `base` - PLAYER_DEAD_1/2 = 46/47.
+    pub const DEAD_1: usize = 46;
 }
 
 const WALK_FRAME_SECONDS: f32 = 0.1;
@@ -388,6 +440,12 @@ pub fn animate_player(
     let Ok(mut p) = query.single_mut() else {
         return;
     };
+    if p.dead_timer != 0 {
+        // PLAYER_DEAD_1/2 alternate every tick, shared by both facings
+        // (game1.c:9236: `PLAYER_DEAD_1 + (playerDeadTime % 2)`).
+        p.frame = frame::DEAD_1 + (p.dead_timer as usize % 2);
+        return;
+    }
     let base = match p.face_dir {
         FaceDir::West => 0,
         FaceDir::East => 23,
@@ -407,6 +465,10 @@ pub fn animate_player(
         p.anim_timer += time.delta_secs();
         let step = (p.anim_timer / WALK_FRAME_SECONDS) as usize % frame::WALK.len();
         frame::WALK[step]
+    } else if !input.west && !input.east && input.look_up {
+        frame::LOOK_NORTH
+    } else if !input.west && !input.east && input.look_down {
+        frame::LOOK_SOUTH
     } else {
         p.anim_timer = 0.0;
         frame::STAND

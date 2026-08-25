@@ -26,14 +26,24 @@ pub fn spawn_camera(mut commands: Commands) {
 pub fn follow_player(
     player_q: Query<&Player>,
     level: Res<CurrentLevel>,
-    mut cam_q: Query<&mut Transform, With<GameCamera>>,
+    mut cam_q: Query<(&mut Transform, &Projection), With<GameCamera>>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
     };
-    let Ok(mut cam_t) = cam_q.single_mut() else {
+    let Ok((mut cam_t, projection)) = cam_q.single_mut() else {
         return;
     };
+    // The clamp margin must match the *actual* rendered viewport, not a
+    // guessed constant - a mismatch here either leaves dead space or (as
+    // reported) lets the camera stop short, truncating the player/ground
+    // out of frame at level sections shorter than the guessed margin.
+    let Projection::Orthographic(ortho) = projection else {
+        return;
+    };
+    let half_view_w = ortho.area.width() / 2.0;
+    let half_view_h = ortho.area.height() / 2.0;
+
     let target_x = (player.x as f32 + 1.5) * TILE_PX;
     let target_y = -(player.y as f32 - 2.0) * TILE_PX;
 
@@ -41,8 +51,6 @@ pub fn follow_player(
     let max_x = level.content_max.0 as f32 * TILE_PX;
     let min_y = -(level.content_max.1 as f32) * TILE_PX;
     let max_y = -(level.content_min.1 as f32) * TILE_PX;
-    let half_view_w = 160.0; // ~38 tiles at 8px, half-width
-    let half_view_h = 90.0;
 
     cam_t.translation.x = if max_x - min_x > half_view_w * 2.0 {
         target_x.clamp(min_x + half_view_w, max_x - half_view_w)

@@ -22,6 +22,23 @@ pub struct ExitTrigger {
 pub struct Collectible {
     pub x: i32,
     pub y: i32,
+    pub act_id: u16,
+}
+
+/// ACT_STAR_FLOAT=1, ACT_STAR=264 - the original tracks these in a
+/// separate "Stars" status-bar counter (`gameStars`, game2.c:1249),
+/// distinct from Score.
+pub const STAR_ACT_IDS: [u16; 2] = [1, 264];
+
+/// A BASKET_*/BARREL_* container - breaks when the player lands on top of
+/// it, revealing/granting whatever `contents` (an ACT_* id) it holds. See
+/// `actor_sprite_map::CONTAINER_CONTENTS`, extracted from every
+/// `ConstructActor(..., ActBarrel, ACT_CONTENTS, ...)` call.
+#[derive(Component)]
+pub struct Container {
+    pub x: i32,
+    pub y: i32,
+    pub contents: u16,
 }
 
 /// `ACT_*` ids for the plain food/gem pickups (excludes their BASKET_*/
@@ -98,10 +115,22 @@ pub fn spawn_level_actors(
             entity.insert(Collectible {
                 x: a.x as i32,
                 y: a.y as i32,
+                act_id: act_type,
             });
         }
         if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {
             entity.insert(crate::enemy::Hazard);
+        }
+        if let Some(contents) = cosmo_assets::actor_sprite_map::container_contents(act_type) {
+            if contents != act_type {
+                // ACT_BASKET_NULL "contains itself" - the game's encoding
+                // for an empty basket; nothing to break out of it.
+                entity.insert(Container {
+                    x: a.x as i32,
+                    y: a.y as i32,
+                    contents,
+                });
+            }
         }
         if crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
             let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;

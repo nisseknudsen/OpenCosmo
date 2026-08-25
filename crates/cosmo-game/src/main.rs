@@ -38,6 +38,7 @@ fn main() {
         .insert_resource(Time::<Fixed>::from_hz(18.2))
         .init_resource::<PlayerInput>()
         .init_resource::<flow::Score>()
+        .init_resource::<flow::Stars>()
         .add_systems(Startup, setup)
         .add_systems(
             FixedUpdate,
@@ -46,7 +47,9 @@ fn main() {
                 player::move_player_tick,
                 enemy::move_walkers,
                 enemy::hazard_damage,
+                player::update_death,
                 flow::collect_pickups,
+                flow::smash_containers,
                 flow::check_level_exit,
                 player::animate_player,
             )
@@ -58,6 +61,7 @@ fn main() {
                 player::apply_player_frame,
                 player::sync_transform,
                 camera::follow_player,
+                level::scroll_backdrop,
                 hud::update_hud,
                 audio::update_music,
             )

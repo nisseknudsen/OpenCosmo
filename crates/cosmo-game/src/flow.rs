@@ -4,7 +4,7 @@
 //! actual pattern from episode1.h's MAP_NAMES, truncated to whichever A*
 //! levels this installer's data actually shipped - see docs/file-formats.md).
 
-use crate::actors::{self, Collectible, ExitTrigger};
+use crate::actors::{self, Collectible, Container, ExitTrigger};
 use crate::data::GameData;
 use crate::level::{self, CurrentLevel, LevelScoped};
 use crate::player::Player;
@@ -14,9 +14,14 @@ use bevy::prelude::*;
 #[derive(Resource, Default)]
 pub struct Score(pub u32);
 
+/// The original's separate "Stars" status-bar counter (game2.c:1249).
+#[derive(Resource, Default)]
+pub struct Stars(pub u32);
+
 pub fn collect_pickups(
     mut commands: Commands,
     mut score: ResMut<Score>,
+    mut stars: ResMut<Stars>,
     player_q: Query<&Player>,
     pickup_q: Query<(Entity, &Collectible)>,
 ) {
@@ -26,7 +31,40 @@ pub fn collect_pickups(
     for (entity, c) in &pickup_q {
         if (c.x - player.x).abs() <= 2 && (c.y - player.y).abs() <= 3 {
             commands.entity(entity).despawn();
-            score.0 += 100;
+            if actors::STAR_ACT_IDS.contains(&c.act_id) {
+                stars.0 += 1;
+            } else {
+                score.0 += 100;
+            }
+        }
+    }
+}
+
+/// Breaks a container when the player lands on top of it (not just walks
+/// into its side) - approximated as "on the ground, roughly at the
+/// container's own row". Awards points if what's inside is food/a gem;
+/// containers holding a mechanism (a jump pad, a bomb, ...) just clear
+/// without a score bump.
+pub fn smash_containers(
+    mut commands: Commands,
+    mut score: ResMut<Score>,
+    player_q: Query<&Player>,
+    containers: Query<(Entity, &Container)>,
+) {
+    let Ok(player) = player_q.single() else {
+        return;
+    };
+    if !player.on_ground {
+        return;
+    }
+    for (entity, c) in &containers {
+        let dx = (c.x - player.x).abs();
+        let dy = player.y - c.y;
+        if dx <= 2 && (0..=2).contains(&dy) {
+            commands.entity(entity).despawn();
+            if actors::COLLECTIBLE_ACT_IDS.contains(&c.contents) {
+                score.0 += 100;
+            }
         }
     }
 }

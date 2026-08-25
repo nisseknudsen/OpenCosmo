@@ -103,14 +103,40 @@ pub fn spawn_level_tiles(
     }
 }
 
-const BACKDROP_PX: f32 = TILE_PX * 40.0; // 320
-const BACKDROP_PX_H: f32 = TILE_PX * 18.0; // 144
+pub const BACKDROP_PX: f32 = TILE_PX * 40.0; // 320
+pub const BACKDROP_PX_H: f32 = TILE_PX * 18.0; // 144
+const GRID: i32 = 5; // NxN backdrop tiles - generous margin around the viewport,
+                      // especially for the axis with scrolling disabled (fixed
+                      // position, so it needs static coverage rather than wrap)
 
-/// Tiles the level's backdrop image edge-to-edge behind the populated tile
-/// area. This is a static (non-parallax) tiling for now - the original
-/// scrolls the backdrop at half the foreground's rate for a depth effect,
-/// which would need a scrolling/wrapping material to do seamlessly; a
-/// reasonable follow-up rather than blocking this on it.
+/// Grid offset (in backdrop-tile units) this entity occupies; repositioned
+/// every frame by `scroll_backdrop` to wrap around the camera.
+#[derive(Component)]
+pub struct BackdropTile {
+    pub col: i32,
+    pub row: i32,
+}
+
+/// Whether the backdrop tracks the camera (wrapping, at half rate for a
+/// parallax depth effect) on each axis - `hasHScrollBackdrop`/
+/// `hasVScrollBackdrop` from the level's map-flags bitfield
+/// (level.rs::parse, game1.c:10490-10504). An axis with scrolling disabled
+/// stays fixed at its spawn position instead of tracking the camera -
+/// getting this wrong is exactly what caused the reported "mountain
+/// repeats above the clouds when jumping": we used to tile the backdrop
+/// across the whole level in *both* axes unconditionally, even though
+/// e.g. level A1 has v-scroll disabled.
+#[derive(Resource)]
+pub struct BackdropScroll {
+    pub h: bool,
+    pub v: bool,
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+}
+
+/// Spawns a fixed 3x3 grid of backdrop tiles; `scroll_backdrop` repositions
+/// them every frame to wrap seamlessly around the camera instead of tiling
+/// the whole level up front.
 pub fn spawn_backdrop(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -121,26 +147,56 @@ pub fn spawn_backdrop(
         return;
     };
     let handle: Handle<Image> = asset_server.load(format!("generated/backdrops/{name}.png"));
-    let (min_x, min_y, max_x, max_y) = bounds;
-    let world_w = (max_x - min_x) as f32 * TILE_PX;
-    let world_h = (max_y - min_y) as f32 * TILE_PX;
-    let cols = (world_w / BACKDROP_PX).ceil() as i32 + 1;
-    let rows = (world_h / BACKDROP_PX_H).ceil() as i32 + 1;
-    for row in 0..rows {
-        for col in 0..cols {
-            let x = min_x as f32 * TILE_PX + col as f32 * BACKDROP_PX;
-            let y = min_y as f32 * TILE_PX + row as f32 * BACKDROP_PX_H;
+    for row in -(GRID / 2)..=(GRID / 2) {
+        for col in -(GRID / 2)..=(GRID / 2) {
             commands.spawn((
                 Sprite {
                     image: handle.clone(),
                     anchor: bevy::sprite::Anchor::TopLeft,
                     ..default()
                 },
-                Transform::from_translation(Vec3::new(x, -y, -10.0)),
+                Transform::from_translation(Vec3::new(0.0, 0.0, -10.0)),
+                BackdropTile { col, row },
                 BackdropMarker,
                 LevelScoped,
             ));
         }
+    }
+    let (min_x, min_y, ..) = bounds;
+    commands.insert_resource(BackdropScroll {
+        h: level.has_h_scroll_backdrop,
+        v: level.has_v_scroll_backdrop,
+        anchor_x: min_x as f32 * TILE_PX,
+        anchor_y: -(min_y as f32) * TILE_PX, // world Y is negative going down
+    });
+}
+
+pub fn scroll_backdrop(
+    camera_q: Query<&Transform, (With<crate::camera::GameCamera>, Without<BackdropTile>)>,
+    scroll: Option<Res<BackdropScroll>>,
+    mut tiles: Query<(&BackdropTile, &mut Transform)>,
+) {
+    let Ok(cam_t) = camera_q.single() else {
+        return;
+    };
+    let Some(scroll) = scroll else {
+        return;
+    };
+    // Half the camera's rate, for a parallax depth effect (the original
+    // achieves this with pre-shifted backdrop copies; we just move it).
+    let base_x = if scroll.h {
+        (cam_t.translation.x * 0.5 / BACKDROP_PX).floor() * BACKDROP_PX
+    } else {
+        scroll.anchor_x
+    };
+    let base_y = if scroll.v {
+        (cam_t.translation.y * 0.5 / BACKDROP_PX_H).floor() * BACKDROP_PX_H
+    } else {
+        scroll.anchor_y
+    };
+    for (tile, mut t) in &mut tiles {
+        t.translation.x = base_x + tile.col as f32 * BACKDROP_PX;
+        t.translation.y = base_y + tile.row as f32 * BACKDROP_PX_H;
     }
 }
 
