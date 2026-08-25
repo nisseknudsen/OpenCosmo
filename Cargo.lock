@@ -1712,6 +1712,7 @@ dependencies = [
  "blake3",
  "hound",
  "image",
+ "nuked-opl3",
  "serde",
  "serde_json",
  "zip",
@@ -3014,6 +3015,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuked-opl3"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe763ce652db623a34372b1628588faaee86af83195175acee070d92d1fe27b7"
+
+[[package]]
 name = "num-derive"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3737,6 +3744,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7ceb6607dd738c99bc8cb28eff249b7cd5c8ec88b9db96c0608c1480d140fb1"
 dependencies = [
  "cpal",
+ "hound",
  "lewton",
 ]
 

@@ -12,6 +12,7 @@ use std::path::Path;
 const ATLAS_COLS: u32 = 40;
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
+const MUSIC_SAMPLE_RATE: u32 = 44100;
 
 #[derive(Serialize)]
 struct LevelJson {
@@ -309,6 +310,22 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
             dir.join("manifest.json"),
             serde_json::to_vec_pretty(&SpriteManifest { frames })?,
         )?;
+    }
+
+    // --- Music: every M*.MNI track this episode's data actually shipped,
+    // rendered from IMF to WAV via an OPL2 emulator (see music.rs). ---
+    let music_dir = out_dir.join("music");
+    std::fs::create_dir_all(&music_dir)?;
+    for name in level::MUSIC_NAMES {
+        let upper = name.to_ascii_uppercase();
+        let Some(&raw) = vol_map.get(&upper) else {
+            continue;
+        };
+        let events = crate::music::parse_imf(raw)
+            .with_context(|| format!("parsing music track {name}"))?;
+        let stem = name.trim_end_matches(".mni");
+        crate::music::render_to_wav(&events, MUSIC_SAMPLE_RATE, &music_dir.join(format!("{stem}.wav")))
+            .with_context(|| format!("rendering music track {name}"))?;
     }
 
     Ok(converted)

@@ -2,4 +2,5 @@
 /extracted
 /original
 /crates/cosmo-game/assets/generated
+/.claude
 *.swp

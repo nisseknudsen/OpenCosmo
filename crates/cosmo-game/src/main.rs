@@ -1,4 +1,5 @@
 mod actors;
+mod audio;
 mod camera;
 mod data;
 mod flow;
@@ -55,6 +56,7 @@ fn main() {
                 player::sync_transform,
                 camera::follow_player,
                 hud::update_hud,
+                audio::update_music,
             )
                 .chain(),
         )

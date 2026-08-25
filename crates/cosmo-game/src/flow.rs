@@ -104,6 +104,7 @@ pub fn load_level_into_world(
         height: level.height,
         content_min: (bounds.0, bounds.1),
         content_max: (bounds.2, bounds.3),
+        music: level.music.clone(),
     })
 }
 

@@ -188,6 +188,14 @@ pub fn move_player_tick(
     let mut dummy_cling = false;
 
     // --- Horizontal movement ---
+    // NOTE: the original (game1.c:8606-8687) moves speculatively first
+    // (decrements playerX immediately when already facing the movement
+    // direction) then tests collision at the *new* position, reverting on
+    // block - and has a documented uninitialized-variable bug in its slope
+    // handling along that path. This is a test-before-move rewrite that
+    // reaches the same outcome (blocked at walls, free otherwise, steps up
+    // one row on a slope) without replicating that UB; worth revisiting if
+    // a one-tile boundary discrepancy against the original ever matters.
     if input.west && p.cling_dir.is_none() && !input.east {
         if p.face_dir == FaceDir::West {
             if p.x > 0 {

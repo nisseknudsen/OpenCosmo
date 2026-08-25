@@ -23,6 +23,7 @@ pub struct CurrentLevel {
     /// 512x64) with real content filling only a fraction of it.
     pub content_min: (usize, usize),
     pub content_max: (usize, usize),
+    pub music: Option<String>,
 }
 
 /// Tile-space bounding box `(min_x, min_y, max_x, max_y)` of non-air cells.
