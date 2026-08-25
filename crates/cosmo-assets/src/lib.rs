@@ -1,7 +1,9 @@
 pub mod cache;
+pub mod convert;
 pub mod level;
 pub mod palette;
 pub mod shell;
+pub mod sprite;
 pub mod tile;
 pub mod vol;
 

@@ -1721,7 +1721,11 @@ dependencies = [
 name = "cosmo-game"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
+ "cosmo-assets",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

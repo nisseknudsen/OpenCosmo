@@ -61,7 +61,92 @@ fn main() -> Result<()> {
         &masked_tiles,
     )?;
 
+    // 5. Player sprite: decode a handful of frames.
+    let plyrinfo = to_u16le(&find(&stn, "PLYRINFO.MNI"));
+    let players_mni = find(&stn, "PLAYERS.MNI");
+    let mut sheet_tiles: Vec<Vec<[[u8; 4]; 64]>> = Vec::new();
+    let mut sheet_dims: Vec<(usize, usize)> = Vec::new();
+    for frame in 0..12usize {
+        let info = cosmo_assets::sprite::frame_info(&plyrinfo, 0, frame);
+        if info.width_tiles == 0 || info.height_tiles == 0 {
+            break;
+        }
+        let tiles = cosmo_assets::sprite::decode_frame_tiles(&players_mni, &info);
+        sheet_dims.push((info.width_tiles as usize, info.height_tiles as usize));
+        sheet_tiles.push(tiles);
+    }
+    save_sprite_strip(&out_dir.join("player_frames.png"), &sheet_tiles, &sheet_dims)?;
+
+    // 6. A handful of actor sprite types.
+    let actrinfo = to_u16le(&find(&stn, "ACTRINFO.MNI"));
+    let actors_mni = find(&stn, "ACTORS.MNI");
+    let banks = cosmo_assets::sprite::split_actor_banks(&actors_mni);
+    let mut actor_tiles: Vec<Vec<[[u8; 4]; 64]>> = Vec::new();
+    let mut actor_dims: Vec<(usize, usize)> = Vec::new();
+    for sprite_type in 0..40usize {
+        if sprite_type >= actrinfo.len() {
+            break;
+        }
+        let info = cosmo_assets::sprite::frame_info(&actrinfo, sprite_type, 0);
+        if info.width_tiles == 0
+            || info.height_tiles == 0
+            || info.width_tiles > 8
+            || info.height_tiles > 8
+        {
+            continue;
+        }
+        let bank = banks[info.bank.min(2) as usize];
+        if info.data_offset as usize + info.width_tiles as usize * info.height_tiles as usize * 40
+            > bank.len()
+        {
+            continue;
+        }
+        let tiles = cosmo_assets::sprite::decode_frame_tiles(bank, &info);
+        actor_dims.push((info.width_tiles as usize, info.height_tiles as usize));
+        actor_tiles.push(tiles);
+    }
+    save_sprite_strip(&out_dir.join("actor_frame0_samples.png"), &actor_tiles, &actor_dims)?;
+
     println!("wrote PNGs to {}", out_dir.display());
+    Ok(())
+}
+
+fn to_u16le(bytes: &[u8]) -> Vec<u16> {
+    bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect()
+}
+
+fn save_sprite_strip(
+    path: &std::path::Path,
+    frames: &[Vec<[[u8; 4]; 64]>],
+    dims: &[(usize, usize)],
+) -> Result<()> {
+    if frames.is_empty() {
+        return Ok(());
+    }
+    let max_h = dims.iter().map(|(_, h)| *h).max().unwrap_or(1) * 8;
+    let total_w: usize = dims.iter().map(|(w, _)| *w * 8 + 2).sum();
+    let mut img = RgbaImage::new(total_w as u32, max_h as u32);
+    let mut x_cursor = 0usize;
+    for (tiles, (w, h)) in frames.iter().zip(dims.iter()) {
+        for ty in 0..*h {
+            for tx in 0..*w {
+                let tile = &tiles[ty * w + tx];
+                for i in 0..64 {
+                    let px = x_cursor + tx * 8 + i % 8;
+                    let py = ty * 8 + i / 8;
+                    let p = tile[i];
+                    if p[3] != 0 {
+                        img.put_pixel(px as u32, py as u32, Rgba(p));
+                    }
+                }
+            }
+        }
+        x_cursor += w * 8 + 2;
+    }
+    img.save(path)?;
     Ok(())
 }
 
