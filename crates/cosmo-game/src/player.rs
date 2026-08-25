@@ -54,6 +54,13 @@ pub struct Player {
     /// floating upward), counting ticks - mirrors playerDeadTime
     /// (game1.c:9230-9256), which respawns once it passes 36.
     pub dead_timer: u32,
+    /// Shown in the status bar's "Bombs" field. Bomb placement itself
+    /// (MovePlayer's cmdBomb branch, game1.c:8497-8546) isn't ported yet,
+    /// so this currently only ever reads 0.
+    pub bombs: u32,
+    /// How many health cells the meter shows - `playerHealthCells`, which
+    /// starts at 3 (game1.c:10581) and grows with power-ups.
+    pub health_cells: u32,
 }
 
 impl Player {
@@ -74,6 +81,8 @@ impl Player {
             health: 4,
             hurt_cooldown: 0,
             dead_timer: 0,
+            bombs: 0,
+            health_cells: 3,
         }
     }
 }

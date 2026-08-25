@@ -10,6 +10,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const ATLAS_COLS: u32 = 40;
+/// Status bar geometry from DrawStaticGameScreen() (game2.c:3597-3604):
+/// screen rows 19..24 x columns 1..38.
+pub const STATUS_W_TILES: usize = 38;
+pub const STATUS_H_TILES: usize = 6;
+/// Font atlas is 100 masked tiles; 10 per row keeps digit rows aligned
+/// (digits are font tiles 26..35, i.e. FONT_0 = byte offset 0x0410 / 40).
+pub const FONT_ATLAS_COLS: u32 = 10;
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
 const MUSIC_SAMPLE_RATE: u32 = 44100;
@@ -142,6 +149,37 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
         })?,
     )?;
     std::fs::write(out_dir.join("tile_attrs.bin"), get(&stn_map, "TILEATTR.MNI")?)?;
+
+    // --- Status bar background: a plain 38x6 grid of solid tiles (7296
+    // bytes = 38*6*32), blitted to screen rows 19..24 / columns 1..38 by
+    // DrawStaticGameScreen() (game2.c:3590-3610). ---
+    let status_tiles = tile::decode_all_solid(&get(&stn_map, "STATUS.MNI")?);
+    let mut status_px = vec![[0u8; 4]; STATUS_W_TILES * 8 * STATUS_H_TILES * 8];
+    let status_w_px = STATUS_W_TILES * 8;
+    for (t, tile) in status_tiles.iter().enumerate() {
+        let tx = (t % STATUS_W_TILES) * 8;
+        let ty = (t / STATUS_W_TILES) * 8;
+        for (i, p) in tile.iter().enumerate() {
+            status_px[(ty + i / 8) * status_w_px + (tx + i % 8)] = *p;
+        }
+    }
+    save_rgba(
+        &out_dir.join("status_bar.png"),
+        status_w_px as u32,
+        (STATUS_H_TILES * 8) as u32,
+        &status_px,
+    )?;
+
+    // --- Font: 100 masked tiles. LoadFontTileData() (game1.c:541-553)
+    // inverts every 5th byte on load - i.e. the AND-mask byte of each
+    // 5-byte row - so the on-disk mask is stored inverted relative to the
+    // normal masked-tile convention. Undo that before decoding. ---
+    let mut fonts_mni = get(&stn_map, "FONTS.MNI")?;
+    for i in (0..fonts_mni.len()).step_by(5) {
+        fonts_mni[i] = !fonts_mni[i];
+    }
+    let font_tiles = tile::decode_all_masked(&fonts_mni);
+    save_atlas(&out_dir.join("font.png"), &font_tiles, FONT_ATLAS_COLS)?;
 
     // --- Levels: convert every A*.MNI / bonus*.mni present, in a stable order ---
     let mut level_names: Vec<&str> = vol_entries

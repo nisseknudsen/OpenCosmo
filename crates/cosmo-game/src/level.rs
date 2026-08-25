@@ -117,21 +117,27 @@ pub struct BackdropTile {
     pub row: i32,
 }
 
-/// Whether the backdrop tracks the camera (wrapping, at half rate for a
-/// parallax depth effect) on each axis - `hasHScrollBackdrop`/
-/// `hasVScrollBackdrop` from the level's map-flags bitfield
-/// (level.rs::parse, game1.c:10490-10504). An axis with scrolling disabled
-/// stays fixed at its spawn position instead of tracking the camera -
-/// getting this wrong is exactly what caused the reported "mountain
-/// repeats above the clouds when jumping": we used to tile the backdrop
-/// across the whole level in *both* axes unconditionally, even though
-/// e.g. level A1 has v-scroll disabled.
+/// Per-axis backdrop movement rate relative to the camera.
+///
+/// The original draws the backdrop straight into the 320x144 game window
+/// every frame (game1.c:885-901), so it is fundamentally **screen-locked**,
+/// not pinned to any world position. `hasHScrollBackdrop`/
+/// `hasVScrollBackdrop` (the level's map-flags bitfield, level.rs::parse)
+/// only choose whether that screen-space image is *offset* as you scroll:
+///
+/// - flag set   -> backdrop moves at **half** the camera's rate, the
+///   classic parallax depth effect (game1.c:708-713).
+/// - flag clear -> backdrop moves at exactly the camera's rate, i.e. it
+///   appears completely static behind the action.
+///
+/// Anchoring a non-scrolling axis to a fixed *world* position instead (as
+/// this did before) makes the backdrop drift out of the viewport as the
+/// camera moves - which is what put A1's mountains down behind the ground
+/// instead of along the horizon.
 #[derive(Resource)]
 pub struct BackdropScroll {
-    pub h: bool,
-    pub v: bool,
-    pub anchor_x: f32,
-    pub anchor_y: f32,
+    pub rate_x: f32,
+    pub rate_y: f32,
 }
 
 /// Spawns a fixed 3x3 grid of backdrop tiles; `scroll_backdrop` repositions
@@ -162,38 +168,44 @@ pub fn spawn_backdrop(
             ));
         }
     }
-    let (min_x, min_y, ..) = bounds;
+    let _ = bounds; // backdrop is screen-locked; level bounds no longer factor in
     commands.insert_resource(BackdropScroll {
-        h: level.has_h_scroll_backdrop,
-        v: level.has_v_scroll_backdrop,
-        anchor_x: min_x as f32 * TILE_PX,
-        anchor_y: -(min_y as f32) * TILE_PX, // world Y is negative going down
+        rate_x: if level.has_h_scroll_backdrop { 0.5 } else { 1.0 },
+        rate_y: if level.has_v_scroll_backdrop { 0.5 } else { 1.0 },
     });
 }
 
 pub fn scroll_backdrop(
-    camera_q: Query<&Transform, (With<crate::camera::GameCamera>, Without<BackdropTile>)>,
+    camera_q: Query<
+        (&Transform, &Projection),
+        (With<crate::camera::GameCamera>, Without<BackdropTile>),
+    >,
     scroll: Option<Res<BackdropScroll>>,
     mut tiles: Query<(&BackdropTile, &mut Transform)>,
 ) {
-    let Ok(cam_t) = camera_q.single() else {
+    let Ok((cam_t, projection)) = camera_q.single() else {
         return;
     };
     let Some(scroll) = scroll else {
         return;
     };
-    // Half the camera's rate, for a parallax depth effect (the original
-    // achieves this with pre-shifted backdrop copies; we just move it).
-    let base_x = if scroll.h {
-        (cam_t.translation.x * 0.5 / BACKDROP_PX).floor() * BACKDROP_PX
-    } else {
-        scroll.anchor_x
+    let Projection::Orthographic(ortho) = projection else {
+        return;
     };
-    let base_y = if scroll.v {
-        (cam_t.translation.y * 0.5 / BACKDROP_PX_H).floor() * BACKDROP_PX_H
-    } else {
-        scroll.anchor_y
-    };
+    let cam_x = cam_t.translation.x;
+    let cam_y = cam_t.translation.y;
+
+    // Pin the reference tile's top-left to the viewport's top-left, then
+    // slide it back by the parallax lag. `1.0 - rate` is how far the layer
+    // falls behind the camera per unit of travel: 0 for a static backdrop
+    // (rate 1.0), half for a parallax one (rate 0.5). Taking that modulo
+    // the backdrop size keeps the lag inside one tile so the surrounding
+    // grid covers whatever the shift exposes.
+    let lag_x = (cam_x * (1.0 - scroll.rate_x)).rem_euclid(BACKDROP_PX);
+    let lag_y = (cam_y * (1.0 - scroll.rate_y)).rem_euclid(BACKDROP_PX_H);
+    let base_x = cam_x - ortho.area.width() / 2.0 - lag_x;
+    let base_y = cam_y + ortho.area.height() / 2.0 + lag_y;
+
     for (tile, mut t) in &mut tiles {
         t.translation.x = base_x + tile.col as f32 * BACKDROP_PX;
         t.translation.y = base_y + tile.row as f32 * BACKDROP_PX_H;

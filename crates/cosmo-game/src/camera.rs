@@ -13,9 +13,15 @@ pub fn spawn_camera(mut commands: Commands) {
         Projection::Orthographic(OrthographicProjection {
             // Locks the visible area to a classic EGA-screen-ish extent
             // regardless of window size/DPI; Bevy letterboxes to fit.
+            // Exactly the original's game window: SCROLLW x SCROLLH =
+            // 38x18 tiles (def.h:138-139) = 304x144 px. Matching this
+            // matters beyond framing - the backdrop images are 40x18
+            // tiles (320x144) and are meant to fill this window exactly,
+            // so a mismatched viewport height puts the horizon at the
+            // wrong place.
             scaling_mode: ScalingMode::AutoMin {
-                min_width: 160.0,
-                min_height: 100.0,
+                min_width: 304.0,
+                min_height: 144.0,
             },
             ..OrthographicProjection::default_2d()
         }),

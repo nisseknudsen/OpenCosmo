@@ -64,7 +64,8 @@ fn main() {
                 actors::track_player,
                 camera::follow_player,
                 level::scroll_backdrop,
-                hud::update_hud,
+                hud::update_status_bar,
+                hud::fit_camera_to_play_area,
                 audio::update_music,
             )
                 .chain(),
@@ -103,6 +104,22 @@ fn setup(
     commands.insert_resource(tileset_assets);
     commands.insert_resource(data);
 
-    hud::spawn_hud(&mut commands);
+    let hud_assets = hud::HudAssets {
+        font_image: asset_server.load("generated/font.png"),
+        font_layout: layouts.add(TextureAtlasLayout::from_grid(
+            UVec2::splat(8),
+            cosmo_assets::convert::FONT_ATLAS_COLS,
+            10,
+            None,
+            None,
+        )),
+    };
+    hud::spawn_hud(
+        &mut commands,
+        &hud_assets,
+        asset_server.load("generated/status_bar.png"),
+    );
+    commands.insert_resource(hud_assets);
+
     camera::spawn_camera(commands);
 }
