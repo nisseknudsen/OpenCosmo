@@ -55,7 +55,7 @@ const HEALTH_CELLS: usize = 5;
 pub const GAME_VIEW_FRACTION: f32 = 152.0 / 200.0;
 
 /// Keeps the HUD camera from also redrawing the world's sprites.
-const HUD_RENDER_LAYER: usize = 1;
+pub const HUD_RENDER_LAYER: usize = 1;
 
 #[derive(Resource)]
 pub struct HudAssets {
@@ -98,14 +98,15 @@ fn atlas_image(hud: &HudAssets, index: usize) -> ImageNode {
     )
 }
 
-pub fn spawn_hud(commands: &mut Commands, hud: &HudAssets, status_bar: Handle<Image>) {
-    // The game camera is clipped to the play area, and Bevy lays UI out
-    // inside its target camera's viewport - so the bar would end up
-    // squeezed into that same clipped strip. Give the UI its own
-    // full-window camera, drawn after (order 1) without clearing what the
-    // game camera already rendered, and keep it on a separate render layer
-    // so it doesn't redraw every world sprite on top of the game view.
-    let ui_camera = commands
+/// Spawns the full-window camera every piece of UI targets.
+///
+/// The game camera is clipped to the play area, and Bevy lays UI out inside
+/// its target camera's viewport - so anything targeting it would be
+/// squeezed into that same clipped strip. This one covers the whole window,
+/// draws after the game camera (order 1) without clearing it, and sits on
+/// its own render layer so it doesn't redraw every world sprite on top.
+pub fn spawn_ui_camera_on(world: &mut World) -> Entity {
+    world
         .spawn((
             Camera2d,
             Camera {
@@ -115,10 +116,21 @@ pub fn spawn_hud(commands: &mut Commands, hud: &HudAssets, status_bar: Handle<Im
             },
             RenderLayers::layer(HUD_RENDER_LAYER),
         ))
-        .id();
+        .id()
+}
 
+#[derive(Component)]
+pub struct StatusBarUi;
+
+pub fn spawn_hud(
+    commands: &mut Commands,
+    hud: &HudAssets,
+    status_bar: Handle<Image>,
+    ui_camera: Entity,
+) {
     commands
         .spawn((
+            StatusBarUi,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(0.0),

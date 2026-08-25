@@ -4,10 +4,14 @@ use crate::tileset::TILE_PX;
 use bevy::prelude::*;
 use bevy::render::camera::ScalingMode;
 
+/// Size of the scrolling game window in tiles (def.h:138-139).
+const SCROLL_W: i32 = 38;
+const SCROLL_H: i32 = 18;
+
 #[derive(Component)]
 pub struct GameCamera;
 
-pub fn spawn_camera(mut commands: Commands) {
+pub fn spawn_camera(commands: &mut Commands) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -50,22 +54,25 @@ pub fn follow_player(
     let half_view_w = ortho.area.width() / 2.0;
     let half_view_h = ortho.area.height() / 2.0;
 
-    let target_x = (player.x as f32 + 1.5) * TILE_PX;
-    let target_y = -(player.y as f32 - 2.0) * TILE_PX;
+    // Work in the original's own terms: a scroll position measured in
+    // whole tiles for the top-left of the game window, clamped exactly the
+    // way the original clamps it, then converted back to a camera centre.
+    //
+    // The vertical limit is `maxScrollY = 0x10000 / (mapWidth * 2) -
+    // (SCROLLH + 1)` (game1.c:10334). That 0x10000 is the 64KB map buffer,
+    // so `0x10000 / (mapWidth * 2)` is simply how many rows fit in it -
+    // the map's real height, which is *not* the same as the bounding box
+    // of non-empty tiles we were clamping to before. Using the bounding
+    // box let the view slip below the map's last row, exposing a strip of
+    // bare backdrop between the ground and the status bar.
+    let map_w = level.width.max(1) as i32;
+    let map_h = (0x10000 / (map_w * 2)).max(1);
+    let max_scroll_x = (map_w - SCROLL_W).max(0);
+    let max_scroll_y = (map_h - (SCROLL_H + 1)).max(0);
 
-    let min_x = level.content_min.0 as f32 * TILE_PX;
-    let max_x = level.content_max.0 as f32 * TILE_PX;
-    let min_y = -(level.content_max.1 as f32) * TILE_PX;
-    let max_y = -(level.content_min.1 as f32) * TILE_PX;
+    let scroll_x = (player.x - SCROLL_W / 2).clamp(0, max_scroll_x) as f32;
+    let scroll_y = (player.y - SCROLL_H / 2).clamp(0, max_scroll_y) as f32;
 
-    cam_t.translation.x = if max_x - min_x > half_view_w * 2.0 {
-        target_x.clamp(min_x + half_view_w, max_x - half_view_w)
-    } else {
-        (min_x + max_x) / 2.0
-    };
-    cam_t.translation.y = if max_y - min_y > half_view_h * 2.0 {
-        target_y.clamp(min_y + half_view_h, max_y - half_view_h)
-    } else {
-        (min_y + max_y) / 2.0
-    };
+    cam_t.translation.x = scroll_x * TILE_PX + half_view_w;
+    cam_t.translation.y = -(scroll_y * TILE_PX) - half_view_h;
 }

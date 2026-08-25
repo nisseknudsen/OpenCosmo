@@ -3,10 +3,12 @@ mod audio;
 mod camera;
 mod data;
 mod enemy;
+mod enemy_ai;
 mod flow;
 mod hud;
 mod level;
 mod player;
+mod screen;
 mod tileset;
 
 use bevy::prelude::*;
@@ -14,12 +16,13 @@ use bevy::time::Fixed;
 use data::GameData;
 use flow::LevelSequence;
 use player::{Player, PlayerFrames, PlayerInput};
+use screen::{GameState, UiCamera};
 
 const START_LEVEL: &str = "a1";
 
 fn main() {
-    App::new()
-        .add_plugins(
+    let mut app = App::new();
+    app.add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
                 .set(AssetPlugin {
@@ -36,16 +39,44 @@ fn main() {
                 }),
         )
         .insert_resource(Time::<Fixed>::from_hz(18.2))
+        // COSMO_STATE lets a dev (or a headless screenshot run) jump
+        // straight to a screen instead of clicking through the title.
+        .insert_state(match std::env::var("COSMO_STATE").as_deref() {
+            Ok("menu") => GameState::Menu,
+            Ok("credits") => GameState::Credits,
+            Ok("playing") => GameState::Playing,
+            _ => GameState::Title,
+        })
         .init_resource::<PlayerInput>()
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
-        .add_systems(Startup, setup)
+        // --- Title / menu / credits ---
+        .add_systems(OnEnter(GameState::Title), screen::spawn_title)
+        .add_systems(OnExit(GameState::Title), screen::despawn_screen)
+        .add_systems(OnEnter(GameState::Menu), screen::spawn_menu)
+        .add_systems(OnExit(GameState::Menu), screen::despawn_screen)
+        .add_systems(OnEnter(GameState::Credits), screen::spawn_credits)
+        .add_systems(OnExit(GameState::Credits), screen::despawn_screen)
+        .add_systems(
+            Update,
+            (
+                screen::title_input.run_if(in_state(GameState::Title)),
+                screen::credits_input.run_if(in_state(GameState::Credits)),
+                screen::menu_input.run_if(in_state(GameState::Menu)),
+            ),
+        )
+        // --- Gameplay ---
+        .add_systems(OnEnter(GameState::Playing), setup_game)
+        .add_systems(OnExit(GameState::Playing), teardown_game)
         .add_systems(
             FixedUpdate,
             (
                 player::read_input,
                 player::move_player_tick,
                 enemy::move_walkers,
+                // Runs before hazard_damage so contact tests see this
+                // tick's positions rather than the previous one's.
+                enemy_ai::tick_enemies,
                 enemy::hazard_damage,
                 player::update_death,
                 flow::collect_pickups,
@@ -53,7 +84,8 @@ fn main() {
                 flow::check_level_exit,
                 player::animate_player,
             )
-                .chain(),
+                .chain()
+                .run_if(in_state(GameState::Playing)),
         )
         .add_systems(
             Update,
@@ -68,24 +100,67 @@ fn main() {
                 hud::fit_camera_to_play_area,
                 audio::update_music,
             )
-                .chain(),
-        )
-        .run();
+                .chain()
+                .run_if(in_state(GameState::Playing)),
+        );
+
+    insert_core_resources(&mut app);
+    app.run();
 }
 
-fn setup(
+/// Resources that outlive any single screen: the converted game data, the
+/// shared font atlas, and the camera the status bar renders through.
+///
+/// These are inserted directly on the world before the app runs rather than
+/// from a `Startup` system, because Bevy runs the *initial* state
+/// transition before `Startup`'s deferred commands are applied - so an
+/// `OnEnter` system would find these missing and panic.
+fn insert_core_resources(app: &mut App) {
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    app.insert_resource(GameData::load(&assets_dir));
+
+    let font_image = app
+        .world()
+        .resource::<AssetServer>()
+        .load("generated/font.png");
+    let font_layout = app
+        .world_mut()
+        .resource_mut::<Assets<TextureAtlasLayout>>()
+        .add(TextureAtlasLayout::from_grid(
+            UVec2::splat(8),
+            cosmo_assets::convert::FONT_ATLAS_COLS,
+            10,
+            None,
+            None,
+        ));
+    app.insert_resource(hud::HudAssets {
+        font_image,
+        font_layout,
+    });
+
+    let ui_camera = hud::spawn_ui_camera_on(app.world_mut());
+    app.insert_resource(UiCamera(ui_camera));
+}
+
+/// Everything that only exists while a level is being played.
+fn setup_game(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+    data: Res<GameData>,
+    hud_assets: Res<hud::HudAssets>,
+    ui_camera: Res<UiCamera>,
 ) {
-    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    let data = GameData::load(&assets_dir);
-
     let start_level = std::env::var("COSMO_LEVEL").unwrap_or_else(|_| START_LEVEL.to_string());
     let tileset_assets = tileset::load_tileset(&asset_server, &mut layouts, &data);
-    let current_level =
-        flow::load_level_into_world(&mut commands, &asset_server, &data, &tileset_assets, &start_level)
-            .expect("start level missing from generated assets");
+    let current_level = flow::load_level_into_world(
+        &mut commands,
+        &asset_server,
+        &data,
+        &tileset_assets,
+        &start_level,
+    )
+    .expect("start level missing from generated assets");
 
     let level_json = data.load_level(&start_level).unwrap();
     let (start_x, start_y) = level::find_player_start(&level_json);
@@ -102,24 +177,30 @@ fn setup(
     commands.insert_resource(LevelSequence::build(&data, &start_level));
     commands.insert_resource(current_level);
     commands.insert_resource(tileset_assets);
-    commands.insert_resource(data);
 
-    let hud_assets = hud::HudAssets {
-        font_image: asset_server.load("generated/font.png"),
-        font_layout: layouts.add(TextureAtlasLayout::from_grid(
-            UVec2::splat(8),
-            cosmo_assets::convert::FONT_ATLAS_COLS,
-            10,
-            None,
-            None,
-        )),
-    };
     hud::spawn_hud(
         &mut commands,
         &hud_assets,
         asset_server.load("generated/status_bar.png"),
+        ui_camera.0,
     );
-    commands.insert_resource(hud_assets);
 
-    camera::spawn_camera(commands);
+    camera::spawn_camera(&mut commands);
+}
+
+fn teardown_game(
+    mut commands: Commands,
+    scoped: Query<Entity, With<level::LevelScoped>>,
+    players: Query<Entity, With<Player>>,
+    status_bar: Query<Entity, With<hud::StatusBarUi>>,
+    game_camera: Query<Entity, With<camera::GameCamera>>,
+) {
+    for entity in scoped
+        .iter()
+        .chain(players.iter())
+        .chain(status_bar.iter())
+        .chain(game_camera.iter())
+    {
+        commands.entity(entity).despawn();
+    }
 }

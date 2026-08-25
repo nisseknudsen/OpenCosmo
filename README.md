@@ -26,15 +26,19 @@ from source.
 - Original AdLib music plays per-level (decoded IMF → OPL2 synthesis →
   looped WAV playback), matched to each level via the real per-level
   track assignment (packed into the level header's flags word).
+- The status bar is rebuilt from the game's own `STATUS.MNI` panel and
+  `FONTS.MNI` glyphs — score, stars and bombs as flush-right digit runs,
+  health as the original's stacked filled/empty cell meter.
+- Title screen, main menu and credits screen, drawn with the real artwork
+  and font. The original's menu also offers Restore/Story/Instructions/
+  High Scores/Game Redefine/Ordering Info/BBS/Demo, which depend on
+  subsystems this remake hasn't ported, so only working entries are shown.
 - Touching a level's exit actor advances to the next stage in the real
   `A1 A2 bonus1 bonus2 A3 A4 …` progression.
-- Not yet implemented: per-type enemy AI/animation (projectiles, switches,
-  doors, moving platforms, etc. all render but don't act), lives/game-over,
-  sound effects (PC-speaker `SND_*`, separate from the AdLib music), true
-  half-rate parallax scrolling (backdrops currently tile statically), a
-  title/menu screen (the game drops straight into gameplay), and Episodes
-  2–3 (same pipeline, just needs `COSMO2`/`COSMO3` wired up the same way
-  as `COSMO1`).
+- Not yet implemented: lives/game-over, sound effects (PC-speaker `SND_*`,
+  separate from the AdLib music), bomb placement, switches/doors/moving
+  platforms, and Episodes 2–3 (same pipeline, just needs `COSMO2`/`COSMO3`
+  wired up the same way as `COSMO1`).
 
 ## Building & running
 

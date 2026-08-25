@@ -289,6 +289,28 @@ pub fn spawn_level_actors(
             StaticActor,
             LevelScoped,
         ));
+
+        // Actors with a ported ActXxx() behavior drive their own position
+        // and frame from here on (crate::enemy_ai). They keep whatever
+        // Hazard/Collectible markers apply, but must not also be given the
+        // generic `Walker`, or two systems would fight over their position.
+        let behavior = crate::enemy_ai::behavior_for(act_type);
+        if let Some((kind, init)) = behavior {
+            let frames: Vec<Handle<Image>> = manifest
+                .frames
+                .iter()
+                .map(|f| asset_server.load(format!("generated/{rel_dir}/{}", f.file)))
+                .collect();
+            entity.insert(crate::enemy_ai::Enemy::new(
+                kind,
+                init,
+                a.x as i32,
+                a.y as i32,
+                (*width_px as f32 / 8.0).ceil() as i32,
+                height_tiles as i32,
+                frames,
+            ));
+        }
         if EXIT_ACT_IDS.contains(&act_type) {
             entity.insert(ExitTrigger {
                 x: a.x as i32,
@@ -316,7 +338,7 @@ pub fn spawn_level_actors(
                 });
             }
         }
-        if crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
+        if behavior.is_none() && crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
             let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;
             entity.insert(crate::enemy::Walker {
                 x: a.x as i32,
