@@ -2,6 +2,7 @@ mod actors;
 mod audio;
 mod camera;
 mod data;
+mod enemy;
 mod flow;
 mod hud;
 mod level;
@@ -43,6 +44,8 @@ fn main() {
             (
                 player::read_input,
                 player::move_player_tick,
+                enemy::move_walkers,
+                enemy::hazard_damage,
                 flow::collect_pickups,
                 flow::check_level_exit,
                 player::animate_player,

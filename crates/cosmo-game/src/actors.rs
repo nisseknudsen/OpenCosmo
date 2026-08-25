@@ -55,7 +55,16 @@ pub fn spawn_level_actors(
             continue; // SPA_* special actor (player start, platform, light, fountain)
         }
         let act_type = a.map_type - 31;
-        let rel_dir = format!("sprites/actors/{act_type}");
+        // ACT_* (map actor type) and SPR_* (the graphic actually drawn)
+        // are different numbering spaces - see actor_sprite_map.rs. Sprite
+        // folders on disk are keyed by SPR id, produced the same way by
+        // cosmo-assets::convert::convert_episode1.
+        let sprite_type = cosmo_assets::actor_sprite_map::ACT_TO_SPRITE
+            .iter()
+            .find(|(id, ..)| *id == act_type)
+            .map(|(_, spr, ..)| *spr)
+            .unwrap_or(act_type);
+        let rel_dir = format!("sprites/actors/{sprite_type}");
         let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
             continue;
         };
@@ -89,6 +98,19 @@ pub fn spawn_level_actors(
             entity.insert(Collectible {
                 x: a.x as i32,
                 y: a.y as i32,
+            });
+        }
+        if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {
+            entity.insert(crate::enemy::Hazard);
+        }
+        if crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
+            let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;
+            entity.insert(crate::enemy::Walker {
+                x: a.x as i32,
+                y: a.y as i32,
+                dir: 1,
+                width_tiles,
+                height_tiles: height_tiles as i32,
             });
         }
     }

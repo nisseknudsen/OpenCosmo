@@ -278,27 +278,38 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
         })?,
     )?;
 
-    // --- Actor sprites: only the types actually spawned in converted levels ---
+    // --- Actor sprites: only the SPR_* types actually needed by actors
+    // spawned in converted levels. ACT_* (map actor type) and SPR_* (the
+    // graphic actually drawn) are different numbering spaces that only
+    // sometimes coincide - actor_sprite_map.rs, extracted from every
+    // `case ACT_X: ConstructActor(SPR_Y, ...)` arm of NewActorAtIndex()
+    // (game1.c:5618-6371), is the ground truth for this. Folders are keyed
+    // by SPR id (not ACT id) since many ACT_* types share one sprite.
     let actrinfo = to_u16le(&get(&stn_map, "ACTRINFO.MNI")?);
     let actors_mni = get(&stn_map, "ACTORS.MNI")?;
-    let mut used_types: Vec<u16> = Vec::new();
+    let mut used_sprites: Vec<u16> = Vec::new();
     for name in &level_names {
         let data = vol_map[&name.to_ascii_uppercase()];
         let lvl = level::parse(data)?;
         for a in &lvl.actors {
             if a.map_type >= 31 {
                 let act = a.map_type - 31;
-                if !used_types.contains(&act) {
-                    used_types.push(act);
+                let spr = crate::actor_sprite_map::ACT_TO_SPRITE
+                    .iter()
+                    .find(|(id, ..)| *id == act)
+                    .map(|(_, spr, ..)| *spr)
+                    .unwrap_or(act); // fall back to direct mapping if genuinely unlisted
+                if !used_sprites.contains(&spr) {
+                    used_sprites.push(spr);
                 }
             }
         }
     }
-    used_types.retain(|&t| (t as usize) < actrinfo.len() && (t as usize) < MAX_ACTOR_TYPES);
+    used_sprites.retain(|&t| (t as usize) < actrinfo.len() && (t as usize) < MAX_ACTOR_TYPES);
 
     let actors_dir = out_dir.join("sprites/actors");
     std::fs::create_dir_all(&actors_dir)?;
-    for &t in &used_types {
+    for &t in &used_sprites {
         let dir = actors_dir.join(t.to_string());
         std::fs::create_dir_all(&dir)?;
         let frames = convert_sprite_frames(&actrinfo, t as usize, &actors_mni, &dir)?;

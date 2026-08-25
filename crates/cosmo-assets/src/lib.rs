@@ -1,3 +1,4 @@
+pub mod actor_sprite_map;
 pub mod cache;
 pub mod convert;
 pub mod level;

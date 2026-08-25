@@ -43,6 +43,13 @@ pub struct Player {
     pub frame: usize,
     pub anim_timer: f32,
     pub on_ground: bool,
+    /// Starting value 4 (game1.c:10580). HurtPlayer() decrements on
+    /// contact damage; 0 triggers a respawn (our simplified stand-in for
+    /// death) in enemy.rs::hazard_damage.
+    pub health: i32,
+    /// Invincibility frames after taking damage - 44 ticks matches the
+    /// original's HurtPlayer() (game1.c:6927).
+    pub hurt_cooldown: u32,
 }
 
 impl Player {
@@ -60,6 +67,8 @@ impl Player {
             frame: 0,
             anim_timer: 0.0,
             on_ground: false,
+            health: 4,
+            hurt_cooldown: 0,
         }
     }
 }
