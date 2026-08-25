@@ -53,7 +53,8 @@ The first build converts assets into `crates/cosmo-game/assets/generated/`
 reconversion entirely unless the installer file or converter code changes.
 To point at an installer somewhere else: `COSMO_INSTALLER=/path/to/installer.sh cargo run -p cosmo-game`.
 
-**Controls**: Arrow keys / WASD to move, Space (or Up/W) to jump.
+**Controls**: Left/Right or A/D to move, Space to jump, Up/Down (or W/S)
+to look up/down while stationary.
 
 **Debug env vars**: `COSMO_LEVEL=<stem>` picks the starting level (e.g.
 `bonus1`); `COSMO_AUTOPLAY=1` drives the player automatically (used for
