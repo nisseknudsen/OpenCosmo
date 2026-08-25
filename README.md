@@ -35,10 +35,15 @@ from source.
   subsystems this remake hasn't ported, so only working entries are shown.
 - Touching a level's exit actor advances to the next stage in the real
   `A1 A2 bonus1 bonus2 A3 A4 …` progression.
+- Per-actor enemy AI for 14 of the original's `ActXxx()` behaviours,
+  covering ~47% of Episode 1's level actors.
+- Pouncing kills creatures and launches the recoil bounce; bombs are
+  collected, placed with Ctrl, and detonate into a real 6x6-tile blast that
+  damages enemies and the player alike.
 - Not yet implemented: lives/game-over, sound effects (PC-speaker `SND_*`,
-  separate from the AdLib music), bomb placement, switches/doors/moving
-  platforms, and Episodes 2–3 (same pipeline, just needs `COSMO2`/`COSMO3`
-  wired up the same way as `COSMO1`).
+  separate from the AdLib music), per-enemy pounce recoil values and
+  multi-hit enemies, switches/doors/moving platforms, and Episodes 2–3
+  (same pipeline, just needs `COSMO2`/`COSMO3` wired up like `COSMO1`).
 
 ## Building & running
 
@@ -57,12 +62,20 @@ The first build converts assets into `crates/cosmo-game/assets/generated/`
 reconversion entirely unless the installer file or converter code changes.
 To point at an installer somewhere else: `COSMO_INSTALLER=/path/to/installer.sh cargo run -p cosmo-game`.
 
-**Controls**: Left/Right or A/D to move, Space to jump, Up/Down (or W/S)
-to look up/down while stationary.
+**Controls**: Left/Right or A/D to move, Space to jump, Ctrl to drop a
+bomb, Up/Down (or W/S) to look up/down while stationary. Jump onto a
+creature to pounce it.
 
-**Debug env vars**: `COSMO_LEVEL=<stem>` picks the starting level (e.g.
-`bonus1`); `COSMO_AUTOPLAY=1` drives the player automatically (used for
-headless verification during development, not meant for normal play).
+**Menu**: any key at the title screen, then B to begin, C for credits,
+T back to the title, Q to quit.
+
+**Debug env vars**, all used for headless verification during development
+rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
+(e.g. `bonus1`); `COSMO_STATE=menu|credits|playing` jumps straight to a
+screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
+`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_AUTOPLAY=1` drives
+the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
+pounce/bomb/blast events.
 
 ## Architecture
 
