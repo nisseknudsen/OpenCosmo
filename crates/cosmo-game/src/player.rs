@@ -122,12 +122,20 @@ pub struct PlayerInput {
     pub bomb: bool,
 }
 
-pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput>, time: Res<Time>) {
+pub fn read_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut input: ResMut<PlayerInput>,
+    mut tick: Local<u32>,
+) {
     if std::env::var("COSMO_AUTOPLAY").is_ok() {
         input.west = false;
         input.east = true;
-        input.jump = (time.elapsed_secs() as u32) % 2 == 0;
-        input.bomb = (time.elapsed_secs() as u32) % 3 == 0;
+        // Tap rather than hold: the jump latch deliberately blocks a
+        // re-jump until the key is released (game1.c:8793-8797), so a held
+        // key would mask whether jumping is possible at all.
+        *tick += 1;
+        input.jump = *tick % 12 == 0;
+        input.bomb = *tick % 40 == 0;
         return;
     }
     input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
@@ -259,6 +267,11 @@ pub fn move_player_tick(
     // reaches the same outcome (blocked at walls, free otherwise, steps up
     // one row on a slope) without replicating that UB; worth revisiting if
     // a one-tile boundary discrepancy against the original ever matters.
+    // `southmove` is probed *before* stepping, exactly as the original does
+    // (game1.c:8607, 8648). It is what distinguishes walking down a slope
+    // from walking off a ledge.
+    let southmove_pre = test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling);
+
     if input.west && p.cling_dir.is_none() && !input.east {
         if p.face_dir == FaceDir::West {
             if p.x > 0 {
@@ -278,7 +291,20 @@ pub fn move_player_tick(
                 } else {
                     p.x -= 1;
                     if m == MoveResult::Sloped {
+                        // Walking *up* a slope.
                         p.y -= 1;
+                    } else if southmove_pre == MoveResult::Sloped
+                        && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                            == MoveResult::Free
+                    {
+                        // Walking *down* one (game1.c:8638-8645). Clearing
+                        // the falling flag here is what keeps jumping
+                        // possible on a descent - without it the player
+                        // reads as airborne every tick and the jump gate,
+                        // which requires !is_falling, refuses.
+                        p.is_falling = false;
+                        p.jump_time = 0;
+                        p.y += 1;
                     }
                 }
             }
@@ -305,6 +331,14 @@ pub fn move_player_tick(
                 p.x += 1;
                 if m == MoveResult::Sloped {
                     p.y -= 1;
+                } else if southmove_pre == MoveResult::Sloped
+                    && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                        == MoveResult::Free
+                {
+                    // Descending (game1.c:8679-8686); see the west branch.
+                    p.is_falling = false;
+                    p.fall_time = 0;
+                    p.y += 1;
                 }
             }
         } else {
