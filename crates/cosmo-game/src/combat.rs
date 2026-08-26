@@ -17,6 +17,7 @@ use crate::enemy_ai::{Enemy, EnemyKind, CONTAINER_POUNCE_RECOIL};
 use crate::flow::Score;
 use crate::level::{tile_topleft_to_center, LevelScoped};
 use crate::player::{Player, PlayerInput, PLAYER_WIDTH};
+use crate::sfx::{snd, PlaySfx};
 use bevy::prelude::*;
 
 const POUNCE_SCORE: u32 = 100;
@@ -63,6 +64,7 @@ pub fn pounce_enemies(
     mut score: ResMut<Score>,
     mut player_q: Query<&mut Player>,
     mut enemies: Query<(Entity, &mut Enemy)>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -72,10 +74,10 @@ pub fn pounce_enemies(
     }
 
     for (entity, mut enemy) in &mut enemies {
-        let Some(spec) = enemy.kind.pounce_spec() else {
-            continue;
-        };
-        if enemy.dead {
+        // Read per-instance rather than per-kind: a ceiling-mounted jump
+        // pad is the same kind as a floor one but zeroes its hit count
+        // because the original's pounce switch bails on it (game1.c:7096).
+        if enemy.dead || enemy.pounce_hits == 0 {
             continue;
         }
         if !is_pounce_aligned(
@@ -89,18 +91,27 @@ pub fn pounce_enemies(
         ) {
             continue;
         }
-        if !player.try_pounce(spec.recoil) {
+        if !player.try_pounce(enemy.pounce_recoil) {
             continue;
         }
 
+        sfx.write(PlaySfx(snd::PLAYER_POUNCE));
+
         // Tougher actors soak several pounces before dying, each one still
         // bouncing the player (game1.c:7160-7175, 7247-7260).
+        // Indestructible furniture (a jump pad) carries an effectively
+        // unlimited count, so don't report a remaining-hits number for it.
+        let indestructible = enemy.pounce_hits > 1000;
         enemy.pounce_hits -= 1;
         if enemy.pounce_hits > 0 {
-            debug!(
-                "pounced enemy at ({}, {}), {} hit(s) left",
-                enemy.x, enemy.y, enemy.pounce_hits
-            );
+            if indestructible {
+                debug!("bounced off ({}, {})", enemy.x, enemy.y);
+            } else {
+                debug!(
+                    "pounced enemy at ({}, {}), {} hit(s) left",
+                    enemy.x, enemy.y, enemy.pounce_hits
+                );
+            }
             break;
         }
 
@@ -121,6 +132,8 @@ pub fn pounce_containers(
     mut score: ResMut<Score>,
     mut player_q: Query<&mut Player>,
     containers: Query<(Entity, &Container)>,
+    mut sfx: EventWriter<PlaySfx>,
+    mut burst_alternator: Local<bool>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -144,6 +157,15 @@ pub fn pounce_containers(
         if !player.try_pounce(CONTAINER_POUNCE_RECOIL) {
             continue;
         }
+        // The original picks between two burst samples at random
+        // (game1.c:7039-7043); alternating gives the same variety without
+        // needing a matching RNG.
+        *burst_alternator = !*burst_alternator;
+        sfx.write(PlaySfx(if *burst_alternator {
+            snd::BARREL_DESTROY_1
+        } else {
+            snd::BARREL_DESTROY_2
+        }));
         debug!("burst container at ({}, {})", container.x, container.y);
         commands.entity(entity).despawn();
         effects::spawn_pounce_debris(&mut commands, &effects, container.x, container.y);
@@ -163,6 +185,7 @@ pub fn place_bomb(
     mut commands: Commands,
     effects: Res<EffectAssets>,
     input: Res<PlayerInput>,
+    mut sfx: EventWriter<PlaySfx>,
     mut latch: Local<bool>,
     mut player_q: Query<&mut Player>,
 ) {
@@ -173,11 +196,18 @@ pub fn place_bomb(
         *latch = false;
         return;
     }
-    if *latch || player.bombs == 0 || player.dead_timer != 0 {
+    if *latch || player.dead_timer != 0 {
+        return;
+    }
+    // An empty pouch still acknowledges the keypress (game1.c:8522).
+    if player.bombs == 0 {
+        *latch = true;
+        sfx.write(PlaySfx(snd::NO_BOMBS));
         return;
     }
     *latch = true;
     player.bombs -= 1;
+    sfx.write(PlaySfx(snd::PLACE_BOMB));
     debug!("placed bomb at ({}, {})", player.x, player.y);
 
     let Some(sprite) = effects.get(SPR_BOMB_ARMED) else {
@@ -213,12 +243,14 @@ pub fn tick_bombs(
     mut commands: Commands,
     effects: Res<EffectAssets>,
     mut bombs: Query<(Entity, &mut ArmedBomb)>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     for (entity, mut bomb) in &mut bombs {
         if bomb.fuse > 0 {
             bomb.fuse -= 1;
             continue;
         }
+        sfx.write(PlaySfx(snd::EXPLOSION));
         debug!("bomb detonated at ({}, {})", bomb.x, bomb.y);
         commands.entity(entity).despawn();
         effects::spawn_explosion(&mut commands, &effects, bomb.x, bomb.y);

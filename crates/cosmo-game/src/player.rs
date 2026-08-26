@@ -9,6 +9,7 @@ use crate::data::{
     TILE_ATTR_BLOCK_WEST, TILE_ATTR_CAN_CLING, TILE_ATTR_SLOPED,
 };
 use crate::level::{tile_topleft_to_center, CurrentLevel};
+use crate::sfx::{snd, PlaySfx};
 use crate::tileset::TILE_PX;
 use bevy::prelude::*;
 
@@ -236,6 +237,7 @@ pub fn move_player_tick(
     input: Res<PlayerInput>,
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -266,6 +268,7 @@ pub fn move_player_tick(
                         == MoveResult::Free
                         && p.can_cling
                     {
+                        sfx.write(PlaySfx(snd::PLAYER_CLING));
                         p.cling_dir = Some(FaceDir::West);
                         p.is_falling = false;
                         p.jump_time = 0;
@@ -291,6 +294,7 @@ pub fn move_player_tick(
                     == MoveResult::Free
                     && p.can_cling
                 {
+                    sfx.write(PlaySfx(snd::PLAYER_CLING));
                     p.cling_dir = Some(FaceDir::East);
                     p.is_falling = false;
                     p.jump_time = 0;
@@ -362,6 +366,9 @@ pub fn move_player_tick(
         if test_move(Direction::North, p.x, p.y, &level, &data, &mut dummy_cling)
             != MoveResult::Free
         {
+            if p.jump_time > 0 || p.is_recoiling {
+                sfx.write(PlaySfx(snd::PLAYER_HIT_HEAD));
+            }
             p.recoil_left = 0;
             p.is_recoiling = false;
             p.y += 1;
@@ -370,6 +377,8 @@ pub fn move_player_tick(
                 p.cmd_jump_latch = true;
             }
             p.fall_time = 0;
+        } else if new_jump && p.jump_time == 0 {
+            sfx.write(PlaySfx(snd::PLAYER_JUMP));
         }
         if !p.is_recoiling && p.jump_time + 1 > 6 {
             p.is_falling = true;
@@ -399,6 +408,9 @@ pub fn move_player_tick(
             if test_move(Direction::South, p.x, p.y, &level, &data, &mut dummy_cling)
                 != MoveResult::Free
             {
+                if p.fall_time != 0 {
+                    sfx.write(PlaySfx(snd::PLAYER_LAND));
+                }
                 p.is_falling = false;
                 p.on_ground = true;
                 p.y -= 1;
@@ -411,6 +423,9 @@ pub fn move_player_tick(
                 if test_move(Direction::South, p.x, p.y, &level, &data, &mut dummy_cling)
                     != MoveResult::Free
                 {
+                    if p.fall_time != 0 {
+                        sfx.write(PlaySfx(snd::PLAYER_LAND));
+                    }
                     p.is_falling = false;
                     p.on_ground = true;
                     p.y -= 1;
@@ -450,6 +465,7 @@ pub fn update_death(
     mut query: Query<&mut Player>,
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -458,6 +474,11 @@ pub fn update_death(
         return;
     }
     p.dead_timer += 1;
+    // The death jingle lands partway in, once the body starts rising
+    // (game1.c:9243-9244).
+    if p.dead_timer == 10 {
+        sfx.write(PlaySfx(snd::PLAYER_DEATH));
+    }
     if p.dead_timer > 10 {
         p.y -= 1;
     }

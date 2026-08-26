@@ -13,6 +13,7 @@ use crate::data::{
 };
 use crate::level::{tile_topleft_to_center, CurrentLevel};
 use crate::player::Player;
+use crate::sfx::{snd, PlaySfx};
 use bevy::prelude::*;
 
 /// ACT_* ids (map_type - 31) that hurt the player on contact. Excludes
@@ -109,6 +110,7 @@ pub fn hazard_damage(
     mut player_q: Query<&mut Player>,
     static_hazards: Query<&Transform, (With<Hazard>, Without<Walker>)>,
     walker_hazards: Query<(&Walker, &Transform), With<Hazard>>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -150,6 +152,7 @@ pub fn hazard_damage(
     }
 
     player.health -= 1;
+    sfx.write(PlaySfx(snd::PLAYER_HURT));
     player.hurt_cooldown = 44; // matches HurtPlayer()'s cooldown, game1.c:6927
     if player.health <= 0 {
         player.dead_timer = 1; // player::update_death() plays the animation and respawns

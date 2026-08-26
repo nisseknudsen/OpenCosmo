@@ -8,6 +8,7 @@ use crate::actors::{self, Collectible, ExitTrigger};
 use crate::data::GameData;
 use crate::level::{self, CurrentLevel, LevelScoped};
 use crate::player::Player;
+use crate::sfx::{snd, PlaySfx};
 use crate::tileset::TilesetAssets;
 use bevy::prelude::*;
 
@@ -25,6 +26,7 @@ pub fn collect_pickups(
     mut stars: ResMut<Stars>,
     mut player_q: Query<&mut Player>,
     pickup_q: Query<(Entity, &Collectible)>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -37,6 +39,13 @@ pub fn collect_pickups(
             continue;
         }
         commands.entity(entity).despawn();
+
+        // Stars and power-ups get the louder jingle (game1.c:7393, 7475);
+        // everything else the ordinary pickup blip (game1.c:7500, 7542).
+        sfx.write(PlaySfx(match pickup {
+            crate::pickups::Pickup::Star | crate::pickups::Pickup::PowerUp => snd::BIG_PRIZE,
+            _ => snd::PRIZE,
+        }));
 
         // Each kind pays out differently; only plain score and the
         // power-up's payout raise a score pop-up.

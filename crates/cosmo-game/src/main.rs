@@ -12,6 +12,7 @@ mod level;
 mod pickups;
 mod player;
 mod screen;
+mod sfx;
 mod tileset;
 
 use bevy::prelude::*;
@@ -53,6 +54,8 @@ fn main() {
         .init_resource::<PlayerInput>()
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
+        .init_resource::<sfx::SfxState>()
+        .add_event::<sfx::PlaySfx>()
         // --- Title / menu / credits ---
         .add_systems(OnEnter(GameState::Title), screen::spawn_title)
         .add_systems(OnExit(GameState::Title), screen::despawn_screen)
@@ -70,7 +73,7 @@ fn main() {
         )
         // --- Gameplay ---
         .add_systems(OnEnter(GameState::Playing), setup_game)
-        .add_systems(OnExit(GameState::Playing), teardown_game)
+        .add_systems(OnExit(GameState::Playing), (teardown_game, sfx::stop_all_sfx))
         .add_systems(
             FixedUpdate,
             (
@@ -95,6 +98,7 @@ fn main() {
                 flow::collect_pickups,
                 flow::check_level_exit,
                 player::animate_player,
+                sfx::play_queued_sfx,
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -206,6 +210,7 @@ fn setup_game(
     commands.insert_resource(current_level);
     commands.insert_resource(tileset_assets);
     commands.insert_resource(effects::EffectAssets::load(&asset_server, &data));
+    commands.insert_resource(sfx::SfxAssets::load(&asset_server, &data));
 
     hud::spawn_hud(
         &mut commands,

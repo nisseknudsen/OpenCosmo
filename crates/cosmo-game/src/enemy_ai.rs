@@ -58,6 +58,8 @@ pub enum EnemyKind {
     FallingFloor,
     /// `ActPyramid` (game1.c:2657-2693).
     Pyramid,
+    /// `ActJumpPad` (game1.c:2026-2046).
+    JumpPad,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -92,6 +94,10 @@ impl EnemyKind {
             // values come from `ConstructActor` (4 and 2 respectively).
             EnemyKind::Ghost => (7, 4),
             EnemyKind::ParachuteBall => (7, 2),
+            // A jump pad is furniture: it launches the player much harder
+            // than any creature and is never destroyed (game1.c:7097-7106),
+            // so it gets an effectively unlimited hit count.
+            EnemyKind::JumpPad => (40, i32::MAX),
             _ => return None,
         };
         Some(PounceSpec { recoil, hits })
@@ -150,6 +156,9 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (83, EnemyKind::ClamPlant, [0, 0, 0, 0, 0]),           // ACT_CLAM_PLANT_FLOOR
     (84, EnemyKind::ClamPlant, [0, 0, 0, 0, 4]),           // ACT_CLAM_PLANT_CEIL
     (163, EnemyKind::FallingFloor, [0, 0, 0, 0, 0]),       // ACT_FALLING_FLOOR
+    (2, EnemyKind::JumpPad, [0, 0, 0, 0, 0]),              // ACT_JUMP_PAD_FLOOR
+    // The ceiling variant also seeds d3/d4 from its own y - see Enemy::new.
+    (217, EnemyKind::JumpPad, [0, 0, 0, 0, 1]),            // ACT_JUMP_PAD_CEIL
 ];
 
 const DIR2_WEST: i32 = 0;
@@ -192,8 +201,12 @@ pub struct Enemy {
     /// Actors flagged `acrophile` in `ConstructActor` happily walk off
     /// ledges; the rest turn around at one.
     pub acrophile: bool,
-    /// Pounces still needed to kill this actor, from `pounce_spec`.
+    /// Pounces still needed to kill this actor, and the recoil each one
+    /// gives the player. Held per-instance rather than looked up per-kind
+    /// because a ceiling-mounted jump pad is the same kind as a floor one
+    /// but cannot be pounced at all (game1.c:7096).
     pub pounce_hits: i32,
+    pub pounce_recoil: i32,
     pub frames: Vec<Handle<Image>>,
     /// Per-actor PRNG state - see `next_rand`.
     rng: u32,
@@ -212,10 +225,22 @@ impl Enemy {
         // ConstructActor marks the cabbage and parachute ball as acrophile
         // (game1.c:5691, 5843); everything else ported here is not.
         let acrophile = matches!(kind, EnemyKind::Cabbage | EnemyKind::ParachuteBall);
-        let pounce_hits = kind.pounce_spec().map(|s| s.hits).unwrap_or(0);
+        let spec = kind.pounce_spec();
+        let mut pounce_hits = spec.map(|s| s.hits).unwrap_or(0);
+        let pounce_recoil = spec.map(|s| s.recoil).unwrap_or(0);
+        // ActJumpPad's ceiling variant (data5 != 0) hangs from above,
+        // alternating between two rows as it compresses, and the pounce
+        // switch bails out on it immediately.
+        let mut data = data;
+        if kind == EnemyKind::JumpPad && data[4] != 0 {
+            data[2] = y + 1;
+            data[3] = y + 3;
+            pounce_hits = 0;
+        }
         Enemy {
             kind,
             pounce_hits,
+            pounce_recoil,
             x,
             y,
             frame: 0,
@@ -411,6 +436,23 @@ fn adjust_actor_move(e: &mut Enemy, dir: Dir4, level: &LevelJson, data: &GameDat
 /// and sprite frame. Logic and presentation share a system so that
 /// `hazard_damage`, which reads `Transform` in the same schedule, always
 /// sees this tick's position.
+/// `ActJumpPad` (game1.c:2026-2046). Frame 1 is the compressed pad, held
+/// for as many ticks as `d1` counts down; the pounce sets `d1 = 3`. The
+/// ceiling-mounted variant additionally hops between the two rows it was
+/// given at construction so the pad appears to depress upward.
+fn tick_jump_pad(e: &mut Enemy) {
+    if e.d1 > 0 {
+        e.frame = 1;
+        e.d1 -= 1;
+    } else {
+        e.frame = 0;
+    }
+
+    if e.d5 != 0 {
+        e.y = if e.frame == 0 { e.d3 } else { e.d4 };
+    }
+}
+
 pub fn tick_enemies(
     mut query: Query<(&mut Enemy, &mut Transform, &mut Sprite, &mut Visibility)>,
     player_q: Query<&Player>,
@@ -445,6 +487,7 @@ pub fn tick_enemies(
             EnemyKind::SuctionWalker => tick_suction_walker(&mut e, &level, &data),
             EnemyKind::FallingFloor => tick_falling_floor(&mut e, player, &level, &data),
             EnemyKind::Pyramid => tick_pyramid(&mut e, player, &level, &data),
+            EnemyKind::JumpPad => tick_jump_pad(&mut e),
         }
 
         // Presentation. `frame` is clamped rather than trusted: a few
@@ -485,6 +528,8 @@ fn flips_vertically(e: &Enemy) -> bool {
         EnemyKind::ClamPlant => e.d5 == DRAW_MODE_FLIPPED,
         // ActPyramid (game1.c:2661-2662) flips the floor-mounted variant.
         EnemyKind::Pyramid => e.d5 != 0,
+        // ActJumpPad (game1.c:2038) flips the ceiling-mounted variant.
+        EnemyKind::JumpPad => e.d5 != 0,
         _ => false,
     }
 }

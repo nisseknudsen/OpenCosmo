@@ -12,6 +12,7 @@
 use crate::data::GameData;
 use crate::level::{tile_topleft_to_center, LevelScoped};
 use crate::player::Player;
+use crate::sfx::{snd, PlaySfx};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
@@ -189,6 +190,7 @@ pub fn tick_explosions(
     effects: Res<EffectAssets>,
     mut query: Query<(Entity, &mut Explosion, &mut Sprite, &mut Transform)>,
     mut player_q: Query<&mut Player>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Some(sprite) = effects.get(SPR_EXPLOSION) else {
         return;
@@ -227,6 +229,7 @@ pub fn tick_explosions(
                 )
             {
                 p.health -= 1;
+                sfx.write(PlaySfx(snd::PLAYER_HURT));
                 p.hurt_cooldown = 44;
                 if p.health <= 0 {
                     p.dead_timer = 1;

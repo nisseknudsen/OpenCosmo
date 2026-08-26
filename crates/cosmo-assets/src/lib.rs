@@ -5,6 +5,7 @@ pub mod level;
 pub mod music;
 pub mod palette;
 pub mod shell;
+pub mod sound;
 pub mod sprite;
 pub mod tile;
 pub mod vol;

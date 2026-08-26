@@ -29,6 +29,7 @@ pub const EFFECT_SPRITES: &[u16] = &[
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
 const MUSIC_SAMPLE_RATE: u32 = 44100;
+const SFX_SAMPLE_RATE: u32 = 44100;
 
 #[derive(Serialize)]
 struct LevelJson {
@@ -60,6 +61,17 @@ struct FrameMeta {
 #[derive(Serialize)]
 struct SpriteManifest {
     frames: Vec<FrameMeta>,
+}
+
+/// One entry of `sfx/manifest.json`, so the game can look effects up by
+/// their `SND_*` number without re-deriving filenames.
+#[derive(Serialize)]
+struct SoundJson {
+    number: usize,
+    stem: String,
+    priority: u8,
+    label: String,
+    ticks: usize,
 }
 
 #[derive(Serialize)]
@@ -388,6 +400,39 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
         crate::music::render_to_wav(&events, MUSIC_SAMPLE_RATE, &music_dir.join(format!("{stem}.wav")))
             .with_context(|| format!("rendering music track {name}"))?;
     }
+
+    // --- PC speaker sound effects: three banks of 23, stitched into one
+    // contiguous 1-based numbering matching the SND_* constants, exactly
+    // as LoadSoundData() does (game1.c:8255-8257). See sound.rs. ---
+    let sfx_dir = out_dir.join("sfx");
+    std::fs::create_dir_all(&sfx_dir)?;
+    let mut sfx_manifest: Vec<SoundJson> = Vec::new();
+    for (bank_index, bank_name) in crate::sound::SOUND_BANKS.iter().enumerate() {
+        let raw = get(&stn_map, bank_name)?;
+        let effects = crate::sound::parse_sound_bank(&raw)
+            .with_context(|| format!("parsing sound bank {bank_name}"))?;
+        for (i, effect) in effects.iter().enumerate() {
+            let sound_number = bank_index * crate::sound::SOUNDS_PER_BANK + i + 1;
+            let stem = crate::sound::sound_stem(sound_number);
+            crate::sound::render_to_wav(
+                &effect.samples,
+                SFX_SAMPLE_RATE,
+                &sfx_dir.join(format!("{stem}.wav")),
+            )
+            .with_context(|| format!("rendering sound {sound_number} ({stem})"))?;
+            sfx_manifest.push(SoundJson {
+                number: sound_number,
+                stem,
+                priority: effect.priority,
+                label: effect.label.clone(),
+                ticks: effect.samples.len(),
+            });
+        }
+    }
+    std::fs::write(
+        sfx_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&sfx_manifest)?,
+    )?;
 
     Ok(converted)
 }
