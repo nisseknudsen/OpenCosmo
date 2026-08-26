@@ -231,3 +231,50 @@ pub fn check_level_exit(
 
     *current = new_current;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn player_with(health: i32, cells: u32, bombs: u32) -> Player {
+        let mut p = Player::spawn_at(0, 0);
+        p.health = health;
+        p.health_cells = cells;
+        p.bombs = bombs;
+        p
+    }
+
+    #[test]
+    fn restores_everything_banked_since_the_level_started() {
+        let score = Score(1200);
+        let stars = Stars(3);
+        let player = player_with(4, 3, 2);
+        let checkpoint = Checkpoint::capture(&score, &stars, &player);
+
+        // Play on: bank points, spend a bomb, take damage.
+        let mut score = Score(9900);
+        let mut stars = Stars(7);
+        let mut player = player_with(1, 4, 0);
+
+        checkpoint.restore(&mut score, &mut stars, &mut player);
+        assert_eq!(score.0, 1200, "points banked during the attempt are lost");
+        assert_eq!(stars.0, 3);
+        assert_eq!(player.health, 4);
+        assert_eq!(player.health_cells, 3);
+        assert_eq!(player.bombs, 2);
+    }
+
+    #[test]
+    fn a_fresh_checkpoint_round_trips() {
+        let score = Score(0);
+        let stars = Stars(0);
+        let player = player_with(4, 3, 0);
+        let checkpoint = Checkpoint::capture(&score, &stars, &player);
+
+        let mut score = Score(500);
+        let mut stars = Stars(1);
+        let mut player = player_with(2, 3, 1);
+        checkpoint.restore(&mut score, &mut stars, &mut player);
+        assert_eq!((score.0, stars.0, player.health, player.bombs), (0, 0, 4, 0));
+    }
+}
