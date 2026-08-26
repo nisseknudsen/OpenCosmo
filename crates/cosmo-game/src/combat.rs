@@ -12,17 +12,13 @@
 
 use crate::actors::Collectible;
 use crate::effects::{self, EffectAssets, Explosion, SPR_BOMB_ARMED};
-use crate::enemy_ai::Enemy;
+use crate::actors::Container;
+use crate::enemy_ai::{Enemy, EnemyKind, CONTAINER_POUNCE_RECOIL};
 use crate::flow::Score;
 use crate::level::{tile_topleft_to_center, LevelScoped};
 use crate::player::{Player, PlayerInput, PLAYER_WIDTH};
 use bevy::prelude::*;
 
-/// Recoil the player gets from a standard pounce. The original varies this
-/// per enemy (e.g. 40 off a jump pad, 15 off a red jumper), and several
-/// enemies take multiple hits before dying - neither is ported yet, so
-/// every pounceable enemy here dies in one hit with the common recoil.
-const POUNCE_RECOIL: i32 = 7;
 const POUNCE_SCORE: u32 = 100;
 
 /// ACT_BOMB_IDLE - the collectible bomb that stocks the status bar counter.
@@ -69,7 +65,7 @@ pub fn pounce_enemies(
     effects: Res<EffectAssets>,
     mut score: ResMut<Score>,
     mut player_q: Query<&mut Player>,
-    enemies: Query<(Entity, &Enemy)>,
+    mut enemies: Query<(Entity, &mut Enemy)>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -78,8 +74,11 @@ pub fn pounce_enemies(
         return;
     }
 
-    for (entity, enemy) in &enemies {
-        if enemy.dead || !enemy.kind.is_pounceable() {
+    for (entity, mut enemy) in &mut enemies {
+        let Some(spec) = enemy.kind.pounce_spec() else {
+            continue;
+        };
+        if enemy.dead {
             continue;
         }
         if !is_pounce_aligned(
@@ -93,16 +92,73 @@ pub fn pounce_enemies(
         ) {
             continue;
         }
-        if !player.try_pounce(POUNCE_RECOIL) {
+        if !player.try_pounce(spec.recoil) {
             continue;
         }
 
-        debug!("pounced enemy at ({}, {})", enemy.x, enemy.y);
+        // Tougher actors soak several pounces before dying, each one still
+        // bouncing the player (game1.c:7160-7175, 7247-7260).
+        enemy.pounce_hits -= 1;
+        if enemy.pounce_hits > 0 {
+            debug!(
+                "pounced enemy at ({}, {}), {} hit(s) left",
+                enemy.x, enemy.y, enemy.pounce_hits
+            );
+            break;
+        }
+
+        debug!("pounce killed enemy at ({}, {})", enemy.x, enemy.y);
         commands.entity(entity).despawn();
         effects::spawn_pounce_debris(&mut commands, &effects, enemy.x, enemy.y);
         effects::spawn_score_effect(&mut commands, &effects, POUNCE_SCORE, enemy.x, enemy.y);
         score.0 += POUNCE_SCORE;
         break; // one pounce per tick
+    }
+}
+
+/// Baskets and barrels burst when landed on, bouncing the player a little
+/// less than a creature does (game1.c:7152-7158).
+pub fn pounce_containers(
+    mut commands: Commands,
+    effects: Res<EffectAssets>,
+    mut score: ResMut<Score>,
+    mut player_q: Query<&mut Player>,
+    containers: Query<(Entity, &Container)>,
+) {
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.dead_timer != 0 {
+        return;
+    }
+    for (entity, container) in &containers {
+        // Baskets and barrels are 2x2.
+        if !is_pounce_aligned(
+            player.x,
+            player.y,
+            player.fall_time,
+            container.x,
+            container.y,
+            2,
+            2,
+        ) {
+            continue;
+        }
+        if !player.try_pounce(CONTAINER_POUNCE_RECOIL) {
+            continue;
+        }
+        debug!("burst container at ({}, {})", container.x, container.y);
+        commands.entity(entity).despawn();
+        effects::spawn_pounce_debris(&mut commands, &effects, container.x, container.y);
+        effects::spawn_score_effect(
+            &mut commands,
+            &effects,
+            POUNCE_SCORE,
+            container.x,
+            container.y,
+        );
+        score.0 += POUNCE_SCORE;
+        break;
     }
 }
 
@@ -234,9 +290,11 @@ pub fn explosion_damage(
 
     for explosion in &explosions {
         for (entity, enemy) in &enemies {
-            // Same creature filter as pouncing: a blast shouldn't
-            // vaporise floating collectibles or scenery.
-            if enemy.dead || !enemy.kind.is_pounceable() {
+            // Blasts destroy more than pounces do - the roamer slug, for
+            // instance, can only be killed this way (it appears in the
+            // shard/destruction switch at game1.c:6955-7010 but never
+            // calls TryPounce). Floating collectibles are the exception.
+            if enemy.dead || enemy.kind == EnemyKind::Prize {
                 continue;
             }
             if rects_overlap(

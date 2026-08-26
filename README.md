@@ -37,12 +37,15 @@ from source.
   `A1 A2 bonus1 bonus2 A3 A4 …` progression.
 - Per-actor enemy AI for 14 of the original's `ActXxx()` behaviours,
   covering ~47% of Episode 1's level actors.
-- Pouncing kills creatures and launches the recoil bounce; bombs are
-  collected, placed with Ctrl, and detonate into a real 6x6-tile blast that
-  damages enemies and the player alike.
+- Pouncing kills creatures and launches the recoil bounce, with per-type
+  recoil and hit points (a ghost soaks four pounces, a parachute ball two,
+  a basket bursts with a softer bounce). Bombs are collected, placed with
+  Alt, and detonate into a real 6x6-tile blast that damages enemies and
+  the player alike — and reaches things a pounce can't, like the roamer
+  slug.
 - Not yet implemented: lives/game-over, sound effects (PC-speaker `SND_*`,
-  separate from the AdLib music), per-enemy pounce recoil values and
-  multi-hit enemies, switches/doors/moving platforms, and Episodes 2–3
+  separate from the AdLib music), switches/doors/moving platforms, and
+  Episodes 2–3
   (same pipeline, just needs `COSMO2`/`COSMO3` wired up like `COSMO1`).
 
 ## Building & running
@@ -62,9 +65,10 @@ The first build converts assets into `crates/cosmo-game/assets/generated/`
 reconversion entirely unless the installer file or converter code changes.
 To point at an installer somewhere else: `COSMO_INSTALLER=/path/to/installer.sh cargo run -p cosmo-game`.
 
-**Controls**: Left/Right or A/D to move, Space to jump, Ctrl to drop a
-bomb, Up/Down (or W/S) to look up/down while stationary. Jump onto a
-creature to pounce it.
+**Controls**: Left/Right or A/D to move, Ctrl or Space to jump, Alt to
+drop a bomb, Up/Down (or W/S) to look up/down while stationary. Jump onto
+a creature to pounce it. Ctrl/Alt match the original's own defaults; Space
+is added as a modern alternative for jump.
 
 **Menu**: any key at the title screen, then B to begin, C for credits,
 T back to the title, Q to quit.

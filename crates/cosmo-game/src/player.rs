@@ -131,12 +131,16 @@ pub fn read_input(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<PlayerInput
     }
     input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
     input.east = keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD);
-    input.jump = keys.pressed(KeyCode::Space);
+    // The original's defaults are Ctrl to jump and Alt to bomb
+    // (game2.c:2976-2977). Both are kept, with Space added as a modern
+    // alternative for jump - putting bombs on Ctrl instead would collide
+    // with the muscle memory of anyone who played the original.
+    input.jump = keys.pressed(KeyCode::Space)
+        || keys.pressed(KeyCode::ControlLeft)
+        || keys.pressed(KeyCode::ControlRight);
     input.look_up = keys.pressed(KeyCode::ArrowUp) || keys.pressed(KeyCode::KeyW);
     input.look_down = keys.pressed(KeyCode::ArrowDown) || keys.pressed(KeyCode::KeyS);
-    // The original binds bomb to Alt, next to its Ctrl jump; Space took
-    // jump here, so Ctrl is free for bombs.
-    input.bomb = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    input.bomb = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
 }
 
 fn attr_at(level: &crate::data::LevelJson, data: &GameData, x: i32, y: i32) -> u8 {

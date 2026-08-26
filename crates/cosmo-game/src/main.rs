@@ -82,6 +82,7 @@ fn main() {
                 // Pounce resolves before contact damage so landing on an
                 // enemy kills it instead of hurting the player.
                 combat::pounce_enemies,
+                combat::pounce_containers,
                 enemy::hazard_damage,
                 combat::collect_bombs,
                 combat::place_bomb,
@@ -92,7 +93,6 @@ fn main() {
                 effects::tick_score_effects,
                 player::update_death,
                 flow::collect_pickups,
-                flow::smash_containers,
                 flow::check_level_exit,
                 player::animate_player,
             )

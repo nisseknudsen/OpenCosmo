@@ -60,28 +60,47 @@ pub enum EnemyKind {
     Pyramid,
 }
 
+/// How an actor responds to being landed on: the recoil it kicks the
+/// player back with, and how many pounces it survives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PounceSpec {
+    pub recoil: i32,
+    pub hits: i32,
+}
+
 impl EnemyKind {
-    /// Whether landing on this actor pounces it.
+    /// The per-type pounce response, from the `TryPounce(...)` call in each
+    /// arm of the big sprite `switch` (game1.c:7094+).
     ///
-    /// The original decides per sprite type in the big `switch` at
-    /// game1.c:7094+ - only creatures call `TryPounce`. Prizes are
-    /// collectibles you pass through, and the spikes/spears/clam plant
-    /// hurt on contact rather than yielding to a stomp; the pyramid and
-    /// falling floor are scenery.
-    pub fn is_pounceable(self) -> bool {
-        matches!(
-            self,
-            EnemyKind::RoamerSlug
-                | EnemyKind::RedChomper
-                | EnemyKind::PinkWorm
-                | EnemyKind::Cabbage
-                | EnemyKind::ParachuteBall
-                | EnemyKind::Ghost
-                | EnemyKind::Bird
-                | EnemyKind::SuctionWalker
-        )
+    /// `None` means landing on it does nothing - either it's a collectible
+    /// you pass through (prizes) or it hurts on contact rather than
+    /// yielding to a stomp. The roamer slug is in that second group: it
+    /// never calls `TryPounce`, and can only be destroyed by an explosion.
+    ///
+    /// Every creature ported so far happens to use recoil 7; the original's
+    /// larger values belong to types not yet ported (40 for a jump pad, 20
+    /// for a jump-pad robot, 15 for a red jumper or sentry robot).
+    pub fn pounce_spec(self) -> Option<PounceSpec> {
+        let (recoil, hits) = match self {
+            // Dies to a single pounce (game1.c:7136, 7148, 7285, 7301).
+            EnemyKind::Cabbage
+            | EnemyKind::SuctionWalker
+            | EnemyKind::Bird
+            | EnemyKind::RedChomper
+            | EnemyKind::PinkWorm => (7, 1),
+            // Both decrement `data5` and only die at zero; their starting
+            // values come from `ConstructActor` (4 and 2 respectively).
+            EnemyKind::Ghost => (7, 4),
+            EnemyKind::ParachuteBall => (7, 2),
+            _ => return None,
+        };
+        Some(PounceSpec { recoil, hits })
     }
 }
+
+/// Recoil for pouncing a basket or barrel (game1.c:7154) - softer than a
+/// creature, since you're bursting a container rather than stomping.
+pub const CONTAINER_POUNCE_RECOIL: i32 = 5;
 
 /// Ported behavior + starting `data1..data5` for each ACT_* id, taken from
 /// that type's `ConstructActor(...)` call in `NewActorAtIndex()`.
@@ -173,6 +192,8 @@ pub struct Enemy {
     /// Actors flagged `acrophile` in `ConstructActor` happily walk off
     /// ledges; the rest turn around at one.
     pub acrophile: bool,
+    /// Pounces still needed to kill this actor, from `pounce_spec`.
+    pub pounce_hits: i32,
     pub frames: Vec<Handle<Image>>,
     /// Per-actor PRNG state - see `next_rand`.
     rng: u32,
@@ -191,8 +212,10 @@ impl Enemy {
         // ConstructActor marks the cabbage and parachute ball as acrophile
         // (game1.c:5691, 5843); everything else ported here is not.
         let acrophile = matches!(kind, EnemyKind::Cabbage | EnemyKind::ParachuteBall);
+        let pounce_hits = kind.pounce_spec().map(|s| s.hits).unwrap_or(0);
         Enemy {
             kind,
+            pounce_hits,
             x,
             y,
             frame: 0,
