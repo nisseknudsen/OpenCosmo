@@ -361,24 +361,43 @@ Episode 1's 30-map level list; the full `ACT_*`/`SPA_*` actor type enum;
 sound effects are PC-speaker, music is AdLib, with the `Music` struct's
 2-byte length + raw-stream shape.
 
-**Needs a follow-up pass before implementing (flagged explicitly above,
-not guessed):**
-1. Exact multi-tile actor/sprite frame layout inside `A*.MNI` chunks and the
-   `ACTRINFO.MNI`/`PLYRINFO.MNI`/`CARTINFO.MNI` header format.
-2. The 16-color EGA palette's actual RGB values as used by this game.
-3. Exact tile-index → attribute-byte/bit math (byte-per-8-tiles vs.
-   something else — the macro only shows `tileAttributeData[val/8]`, bit
-   selection within that byte wasn't derived).
-4. Map actor-type-ID → `ACT_*`/`SPA_*` offset math (assumed `type - 31` for
-   `ACT_*`, not confirmed against `NewMapActorAtIndex()`).
-5. Recoil/pogo-bounce trigger conditions (where `playerRecoilLeft` gets set).
-6. AdLib/IMF stream record layout and playback tick rate.
-7. PC speaker SFX data format/location.
-8. Episode 2/3 level lists (presumed same pattern as Episode 1, via
-   `episode2.h`/`episode3.h`, not fetched).
+**Resolved since this document was first written.** Everything on the
+original open-questions list has now been settled by reading further into
+`cosmore` and checking the result against the real data files:
 
-For all of #1-8, the fastest path is reading further into `cosmore`'s
-`game1.c`/`game2.c`/`lowlevel.asm` (all already fetched to `/tmp` in this
-session, or re-fetchable from `raw.githubusercontent.com/smitelli/cosmore/master/src/`)
-rather than reverse-engineering the binary blind — the source has already
-done that work and is MIT-licensed for reuse.
+1. **Sprite frame layout** — a 4-word record per frame `{height, width,
+   data_offset, bank}`, with pixel data as `width*height` consecutive
+   40-byte masked tiles in row-major order. Frame counts are bounded by the
+   next sprite's base offset in the info table. See
+   `crates/cosmo-assets/src/sprite.rs`.
+2. **EGA palette** — the game only ever reprograms register 5 (as an
+   animation key colour); every other register stays at the BIOS default,
+   so the stock 16-colour table is correct. See `palette.rs`.
+3. **Tile attribute math** — one uniform lookup, `tileAttributeData[raw / 8]`,
+   for both solid and masked values (game1.c:247-254). Note this is a
+   *different* indexing scheme from the masked-tile graphic lookup, which
+   is `(raw - 16000) / 40`; conflating the two produced a long-lived
+   rendering bug.
+4. **Map actor type offset** — confirmed `ACT_* = map_type - 31` from
+   `NewMapActorAtIndex()` (game1.c:10252). `ACT_*` and `SPR_*` are separate
+   numbering spaces; the mapping between them is in
+   `crates/cosmo-assets/src/actor_sprite_map.rs`, extracted from every
+   `ConstructActor` call.
+5. **Recoil / pounce triggers** — `TryPounce` (game1.c:6844-6895) plus the
+   per-sprite `TryPounce(...)` values in the switch at game1.c:7094+.
+6. **AdLib music** — headerless IMF: 4-byte `{register, value, delay_le16}`
+   records at a 560 Hz tick (the Apogee rate, not id's 700 Hz). See
+   `music.rs`.
+7. **PC-speaker sound effects** — each bank is a 16-byte header followed by
+   16-byte records `{offset_u16, priority_u8, unknown_u8, name[12]}`;
+   sample streams are flat `u16` PIT divisors terminated by `0xFFFF`, with
+   `0` meaning silence and pitch `1193182 / divisor`. Serviced at 140 Hz on
+   both timer paths. Only 23 of each bank's 24 records are loaded — the
+   original's loop stops one short of its own table. See `sound.rs`.
+8. **Episode 2/3 level lists** — in `episode2.h`/`episode3.h`, same shape as
+   Episode 1.
+
+Two things remain genuinely unexplained rather than merely unimplemented:
+the `0x08` byte following each sound-effect priority is never read by the
+original, and the fixed-size actor arrays (`MAX_ACTORS` and friends) are DOS
+memory constraints with no behavioural meaning worth reproducing.

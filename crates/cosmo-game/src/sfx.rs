@@ -101,6 +101,28 @@ pub struct SfxState {
     playing: Option<Entity>,
 }
 
+impl SfxState {
+    /// Frees the channel once the active effect has run out, mirroring
+    /// `PCSpeakerService()` clearing `activeSoundPriority` at `END_SOUND`
+    /// (game1.c:8056-8060).
+    fn release_if_finished(&mut self, now: f64) {
+        if now >= self.active_until {
+            self.active_priority = 0;
+        }
+    }
+
+    /// `StartSound`'s gate: anything quieter than what's playing is dropped
+    /// outright (game1.c:630).
+    fn accepts(&self, priority: u8) -> bool {
+        priority >= self.active_priority
+    }
+
+    fn begin(&mut self, priority: u8, now: f64, duration: f64) {
+        self.active_priority = priority;
+        self.active_until = now + duration;
+    }
+}
+
 /// Drains queued requests and plays at most one, applying the original's
 /// priority rule.
 pub fn play_queued_sfx(
@@ -111,9 +133,8 @@ pub fn play_queued_sfx(
     time: Res<Time>,
 ) {
     let now = time.elapsed_secs_f64();
-    // A finished effect releases the channel (game1.c:8057-8058).
-    if now >= state.active_until {
-        state.active_priority = 0;
+    state.release_if_finished(now);
+    if state.active_priority == 0 {
         state.playing = None;
     }
 
@@ -121,9 +142,7 @@ pub fn play_queued_sfx(
         let Some(clip) = assets.clips.get(&number) else {
             continue;
         };
-        // `StartSound` drops the request outright when something louder is
-        // already going (game1.c:630).
-        if clip.priority < state.active_priority {
+        if !state.accepts(clip.priority) {
             continue;
         }
 
@@ -135,8 +154,7 @@ pub fn play_queued_sfx(
         let entity = commands
             .spawn((AudioPlayer(clip.handle.clone()), PlaybackSettings::DESPAWN))
             .id();
-        state.active_priority = clip.priority;
-        state.active_until = now + clip.duration;
+        state.begin(clip.priority, now, clip.duration);
         state.playing = Some(entity);
     }
 }
@@ -148,4 +166,56 @@ pub fn stop_all_sfx(mut commands: Commands, mut state: ResMut<SfxState>) {
     }
     state.active_priority = 0;
     state.active_until = 0.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Priorities and durations of two real effects, from the converted
+    /// manifest: the jump chirp is the lowest priority in the game, the
+    /// death jingle the highest.
+    const JUMP: (u8, f64) = (1, 18.0 / TICK_HZ);
+    const DEATH: (u8, f64) = (255, 151.0 / TICK_HZ);
+
+    #[test]
+    fn a_quieter_effect_cannot_interrupt_a_louder_one() {
+        let mut state = SfxState::default();
+        state.begin(DEATH.0, 0.0, DEATH.1);
+        state.release_if_finished(0.1);
+        assert!(
+            !state.accepts(JUMP.0),
+            "a jump must not cut off the death jingle"
+        );
+    }
+
+    #[test]
+    fn equal_priority_interrupts() {
+        let mut state = SfxState::default();
+        state.begin(JUMP.0, 0.0, JUMP.1);
+        state.release_if_finished(0.01);
+        // StartSound's test is `<`, so equal priority is allowed through -
+        // consecutive footfalls retrigger rather than being swallowed.
+        assert!(state.accepts(JUMP.0));
+    }
+
+    #[test]
+    fn the_channel_frees_once_the_effect_ends() {
+        let mut state = SfxState::default();
+        state.begin(DEATH.0, 0.0, DEATH.1);
+        state.release_if_finished(DEATH.1 - 0.01);
+        assert!(!state.accepts(JUMP.0), "still playing, so still blocking");
+
+        state.release_if_finished(DEATH.1 + 0.01);
+        assert!(state.accepts(JUMP.0), "finished, so anything may play");
+        assert_eq!(state.active_priority, 0);
+    }
+
+    #[test]
+    fn an_idle_channel_accepts_anything() {
+        let state = SfxState::default();
+        assert!(state.accepts(0));
+        assert!(state.accepts(JUMP.0));
+        assert!(state.accepts(DEATH.0));
+    }
 }
