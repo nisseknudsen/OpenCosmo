@@ -35,10 +35,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-env-changed=COSMO_INSTALLER");
 
     let out_dir = manifest_dir.join("assets/generated");
-    let converted = cosmo_assets::convert::convert_episode1_if_stale(&sh_path, &out_dir)?;
+    let converted = cosmo_assets::convert::convert_all_episodes_if_stale(&sh_path, &out_dir)?;
     if converted {
         println!(
-            "cargo:warning=cosmo-assets: converted game data into {}",
+            "cargo:warning=cosmo-assets: converted all {} episodes into {}",
+            cosmo_assets::convert::EPISODES.len(),
             out_dir.display()
         );
     }

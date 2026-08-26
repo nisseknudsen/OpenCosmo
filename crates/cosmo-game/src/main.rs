@@ -54,6 +54,7 @@ fn main() {
         .init_resource::<PlayerInput>()
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
+        .init_resource::<flow::Checkpoint>()
         .init_resource::<sfx::SfxState>()
         .add_event::<sfx::PlaySfx>()
         // --- Title / menu / credits ---
@@ -138,7 +139,7 @@ fn insert_core_resources(app: &mut App) {
     let font_image = app
         .world()
         .resource::<AssetServer>()
-        .load("generated/font.png");
+        .load(data::asset_path("font.png"));
     let font_layout = app
         .world_mut()
         .resource_mut::<Assets<TextureAtlasLayout>>()
@@ -167,7 +168,14 @@ fn setup_game(
     hud_assets: Res<hud::HudAssets>,
     ui_camera: Res<UiCamera>,
 ) {
-    let start_level = std::env::var("COSMO_LEVEL").unwrap_or_else(|_| START_LEVEL.to_string());
+    // Each episode names its levels differently, so the default start
+    // comes from that episode's own progression rather than a literal.
+    let start_level = std::env::var("COSMO_LEVEL").unwrap_or_else(|_| {
+        data.level_order()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| START_LEVEL.to_string())
+    });
     let tileset_assets = tileset::load_tileset(&asset_server, &mut layouts, &data);
     let current_level = flow::load_level_into_world(
         &mut commands,
@@ -197,6 +205,8 @@ fn setup_game(
     if let Ok(n) = std::env::var("COSMO_GIVE_BOMBS") {
         player.bombs = n.trim().parse().unwrap_or(0);
     }
+    let (player_health, player_cells, player_bombs) =
+        (player.health, player.health_cells, player.bombs);
     commands.spawn((
         player,
         Sprite {
@@ -205,6 +215,13 @@ fn setup_game(
         },
         Transform::default(),
     ));
+    commands.insert_resource(flow::Checkpoint {
+        score: 0,
+        stars: 0,
+        health: player_health,
+        health_cells: player_cells,
+        bombs: player_bombs,
+    });
     commands.insert_resource(player_frames);
     commands.insert_resource(LevelSequence::build(&data, &start_level));
     commands.insert_resource(current_level);
@@ -215,7 +232,7 @@ fn setup_game(
     hud::spawn_hud(
         &mut commands,
         &hud_assets,
-        asset_server.load("generated/status_bar.png"),
+        asset_server.load(data::asset_path("status_bar.png")),
         ui_camera.0,
     );
 

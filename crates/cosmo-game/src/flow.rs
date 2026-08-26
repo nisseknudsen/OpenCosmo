@@ -19,6 +19,42 @@ pub struct Score(pub u32);
 #[derive(Resource, Default)]
 pub struct Stars(pub u32);
 
+/// The state captured on entering a level, restored when the player dies.
+///
+/// `InitializeLevel` ends with `SaveGameState('T')` (game1.c:10555) and
+/// every death path reloads that same slot (game1.c:9207, 9252), so dying
+/// rewinds score, stars, bombs and health to what they were when the level
+/// started - it does not merely move the player back. The snapshot's
+/// contents are exactly the fields `SaveGameState` writes (game1.c:9369-9375).
+#[derive(Resource, Default, Clone, Copy)]
+pub struct Checkpoint {
+    pub score: u32,
+    pub stars: u32,
+    pub health: i32,
+    pub health_cells: u32,
+    pub bombs: u32,
+}
+
+impl Checkpoint {
+    pub fn capture(score: &Score, stars: &Stars, player: &Player) -> Self {
+        Checkpoint {
+            score: score.0,
+            stars: stars.0,
+            health: player.health,
+            health_cells: player.health_cells,
+            bombs: player.bombs,
+        }
+    }
+
+    pub fn restore(&self, score: &mut Score, stars: &mut Stars, player: &mut Player) {
+        score.0 = self.score;
+        stars.0 = self.stars;
+        player.health = self.health;
+        player.health_cells = self.health_cells;
+        player.bombs = self.bombs;
+    }
+}
+
 pub fn collect_pickups(
     mut commands: Commands,
     effects: Res<crate::effects::EffectAssets>,
@@ -98,33 +134,13 @@ pub struct LevelSequence {
 }
 
 impl LevelSequence {
+    /// The order comes from the converter's per-episode `order.json`,
+    /// which already interleaves each episode's bonus stages into its own
+    /// level naming (`A*` for episode 1, `B*`/`C*` for 2 and 3). Deriving
+    /// it here from episode 1's naming instead would leave episodes 2 and
+    /// 3 with an empty progression.
     pub fn build(data: &GameData, start_hint: &str) -> Self {
-        let all = data.list_levels();
-        let mut a_levels: Vec<String> = all
-            .iter()
-            .filter(|n| n.starts_with('a') && n[1..].parse::<u32>().is_ok())
-            .cloned()
-            .collect();
-        a_levels.sort_by_key(|n| n[1..].parse::<u32>().unwrap());
-
-        let has_bonus1 = all.iter().any(|n| n == "bonus1");
-        let has_bonus2 = all.iter().any(|n| n == "bonus2");
-
-        let mut order = Vec::new();
-        let mut i = 0;
-        while i < a_levels.len() {
-            order.push(a_levels[i].clone());
-            if i + 1 < a_levels.len() {
-                order.push(a_levels[i + 1].clone());
-            }
-            if has_bonus1 {
-                order.push("bonus1".to_string());
-            }
-            if has_bonus2 {
-                order.push("bonus2".to_string());
-            }
-            i += 2;
-        }
+        let mut order = data.level_order();
         if order.is_empty() {
             order.push(start_hint.to_string());
         }
@@ -170,6 +186,9 @@ pub fn load_level_into_world(
 
 pub fn check_level_exit(
     mut commands: Commands,
+    mut checkpoint: ResMut<Checkpoint>,
+    score: Res<Score>,
+    stars: Res<Stars>,
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
     tileset: Res<TilesetAssets>,
@@ -204,6 +223,7 @@ pub fn check_level_exit(
     let (sx, sy) = level::find_player_start(&level_json);
     player.x = sx as i32;
     player.y = sy as i32;
+    *checkpoint = Checkpoint::capture(&score, &stars, &player);
     player.is_falling = true;
     player.jump_time = 0;
     player.fall_time = 0;

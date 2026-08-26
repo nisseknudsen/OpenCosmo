@@ -466,6 +466,9 @@ pub fn update_death(
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
     mut sfx: EventWriter<PlaySfx>,
+    checkpoint: Res<crate::flow::Checkpoint>,
+    mut score: ResMut<crate::flow::Score>,
+    mut stars: ResMut<crate::flow::Stars>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -493,9 +496,12 @@ pub fn update_death(
         p.jump_time = 0;
         p.fall_time = 0;
         p.cling_dir = None;
-        p.health = 4;
         p.hurt_cooldown = 0;
         p.dead_timer = 0;
+        // Dying rewinds to the level-entry snapshot rather than just
+        // moving the player - so points banked during the failed attempt
+        // are lost with it.
+        checkpoint.restore(&mut score, &mut stars, &mut p);
     }
 }
 
@@ -595,7 +601,7 @@ impl PlayerFrames {
         let handles = manifest
             .frames
             .iter()
-            .map(|f| asset_server.load(format!("generated/sprites/player/{}", f.file)))
+            .map(|f| asset_server.load(crate::data::asset_path(&format!("sprites/player/{}", f.file))))
             .collect();
         Self(handles)
     }

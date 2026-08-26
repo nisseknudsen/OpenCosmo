@@ -57,7 +57,7 @@ impl EffectAssets {
                     frames: manifest
                         .frames
                         .iter()
-                        .map(|f| asset_server.load(format!("generated/{rel_dir}/{}", f.file)))
+                        .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
                         .collect(),
                 },
             );

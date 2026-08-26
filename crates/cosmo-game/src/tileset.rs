@@ -36,9 +36,9 @@ pub fn load_tileset(
     ));
 
     TilesetAssets {
-        solid_image: asset_server.load("generated/tileset_solid.png"),
+        solid_image: asset_server.load(crate::data::asset_path("tileset_solid.png")),
         solid_layout,
-        masked_image: asset_server.load("generated/tileset_masked.png"),
+        masked_image: asset_server.load(crate::data::asset_path("tileset_masked.png")),
         masked_layout,
     }
 }

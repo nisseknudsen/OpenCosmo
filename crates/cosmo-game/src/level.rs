@@ -152,7 +152,7 @@ pub fn spawn_backdrop(
     let Some(name) = &level.backdrop else {
         return;
     };
-    let handle: Handle<Image> = asset_server.load(format!("generated/backdrops/{name}.png"));
+    let handle: Handle<Image> = asset_server.load(crate::data::asset_path(&format!("backdrops/{name}.png")));
     for row in -(GRID / 2)..=(GRID / 2) {
         for col in -(GRID / 2)..=(GRID / 2) {
             commands.spawn((

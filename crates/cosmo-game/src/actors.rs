@@ -95,7 +95,7 @@ fn spawn_hint_globe(
     let handles: Vec<Handle<Image>> = manifest
         .frames
         .iter()
-        .map(|f| asset_server.load(format!("generated/{rel_dir}/{}", f.file)))
+        .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
         .collect();
 
     let base_meta = &manifest.frames[1];
@@ -197,7 +197,7 @@ fn spawn_eye_plant(
     let handles: Vec<Handle<Image>> = manifest
         .frames
         .iter()
-        .map(|f| asset_server.load(format!("generated/{rel_dir}/{}", f.file)))
+        .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
         .collect();
     let h_tiles = (frame0.height_px as f32 / 8.0).ceil();
     let pos = tile_topleft_to_center(
@@ -264,7 +264,7 @@ pub fn spawn_level_actors(
         let pos = tile_topleft_to_center(a.x as f32, top_row, *width_px as f32, *height_px as f32);
         let mut entity = commands.spawn((
             Sprite {
-                image: asset_server.load(format!("generated/{rel_dir}/{file}")),
+                image: asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{file}"))),
                 ..default()
             },
             Transform::from_translation(pos.extend(5.0)),
@@ -281,7 +281,7 @@ pub fn spawn_level_actors(
             let frames: Vec<Handle<Image>> = manifest
                 .frames
                 .iter()
-                .map(|f| asset_server.load(format!("generated/{rel_dir}/{}", f.file)))
+                .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
                 .collect();
             entity.insert(crate::enemy_ai::Enemy::new(
                 kind,

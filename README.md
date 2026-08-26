@@ -5,10 +5,11 @@ Cosmic Adventure*, built by decoding real game assets out of your GOG
 installer at build time and porting the original engine's physics/behavior
 from source.
 
-## Status: playable vertical slice, Episode 1
+## Status: playable, all three episodes
 
-- All 11 shipped main stages (`A1`–`A11`) plus both bonus stages convert and
-  render correctly (tiles, backdrops, level geometry).
+- All three episodes convert and play: 14/13/13 levels respectively, each
+  with its own level naming (`A*`/`B*`/`C*`), bonus stages, backdrops and
+  music. Select with `COSMO_EPISODE=1|2|3`.
 - Player movement is a faithful port of the original's `MovePlayer()` /
   `TestPlayerMove()`: tile-stepped walking, the real jump curve, gravity
   ramp-up, wall-cling, and collision — running on an 18.2Hz fixed tick
@@ -25,7 +26,13 @@ from source.
   behavior function (`ActXxx` in game1.c; there are ~250 of them).
 - Original AdLib music plays per-level (decoded IMF → OPL2 synthesis →
   looped WAV playback), matched to each level via the real per-level
-  track assignment (packed into the level header's flags word).
+  track assignment (packed into the level header's flags word), alongside
+  the PC-speaker sound effects with the original's priority behaviour.
+- Collectibles use the original's own pickup table: score varies by item
+  (200/400/800/1600/3200), stars and bombs feed their own counters, a
+  hamburger widens the health meter and a power-up heals or pays out.
+- Dying rewinds score, stars, bombs and health to their values on entering
+  the level, the way the original's checkpoint save does.
 - The status bar is rebuilt from the game's own `STATUS.MNI` panel and
   `FONTS.MNI` glyphs — score, stars and bombs as flush-right digit runs,
   health as the original's stacked filled/empty cell meter.
@@ -77,7 +84,8 @@ T back to the title, Q to quit.
 rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
 (e.g. `bonus1`); `COSMO_STATE=menu|credits|playing` jumps straight to a
 screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
-`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_AUTOPLAY=1` drives
+`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_EPISODE=1|2|3`
+picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
 pounce/bomb/blast events.
 

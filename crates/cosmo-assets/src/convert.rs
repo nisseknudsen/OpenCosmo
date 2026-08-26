@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use image::{Rgba, RgbaImage};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const ATLAS_COLS: u32 = 40;
 /// Status bar geometry from DrawStaticGameScreen() (game2.c:3597-3604):
@@ -117,33 +117,84 @@ fn save_rgba(path: &Path, w: u32, h: u32, px: &[[u8; 4]]) -> Result<()> {
     Ok(())
 }
 
-/// Runs `convert_episode1` only if `out_dir`'s cache stamp doesn't already
-/// match the installer's contents + this crate's converter version. Returns
-/// `true` if a (re)conversion actually happened.
-pub fn convert_episode1_if_stale(sh_path: &Path, out_dir: &Path) -> Result<bool> {
+/// The three episodes shipped in the retail release.
+pub const EPISODES: [u8; 3] = [1, 2, 3];
+
+/// How one episode names its data, from `episode{1,2,3}.h`.
+///
+/// Only the `.VOL` differs between episodes - every `.STN` in the retail
+/// release holds byte-identical shared assets (tiles, sprites, font,
+/// sounds), so the tileset/sprite/sfx conversion below is repeated per
+/// episode rather than shared purely for the simplicity of one
+/// self-contained output tree each.
+pub struct EpisodeSpec {
+    pub number: u8,
+    /// Main levels are `A1..`, `B1..`, `C1..` for episodes 1/2/3
+    /// (episode1.h:23-32, episode2.h:23-32, episode3.h:23-32).
+    pub level_prefix: char,
+    /// Each episode has its own pair of bonus stages, interleaved into the
+    /// progression after every two main levels.
+    pub bonus_levels: [&'static str; 2],
+}
+
+pub fn episode_spec(number: u8) -> Result<EpisodeSpec> {
+    Ok(match number {
+        1 => EpisodeSpec {
+            number: 1,
+            level_prefix: 'A',
+            bonus_levels: ["BONUS1.MNI", "BONUS2.MNI"],
+        },
+        2 => EpisodeSpec {
+            number: 2,
+            level_prefix: 'B',
+            bonus_levels: ["BONUS3.MNI", "BONUS4.MNI"],
+        },
+        3 => EpisodeSpec {
+            number: 3,
+            level_prefix: 'C',
+            bonus_levels: ["BONUS5.MNI", "BONUS6.MNI"],
+        },
+        n => anyhow::bail!("no such episode: {n}"),
+    })
+}
+
+/// Where one episode's converted assets live under the shared output root.
+pub fn episode_dir(out_dir: &Path, episode: u8) -> PathBuf {
+    out_dir.join(format!("ep{episode}"))
+}
+
+/// Converts every episode, unless `out_dir`'s cache stamp already matches
+/// the installer's contents + this crate's converter version. One stamp
+/// covers all three, written only after they all succeed, so a partial
+/// conversion can never be mistaken for a complete one. Returns `true` if a
+/// (re)conversion actually happened.
+pub fn convert_all_episodes_if_stale(sh_path: &Path, out_dir: &Path) -> Result<bool> {
     let source_bytes = std::fs::read(sh_path)
         .with_context(|| format!("reading installer {}", sh_path.display()))?;
     let fp = crate::cache::fingerprint(&source_bytes);
     if crate::cache::is_fresh(out_dir, &fp) {
         return Ok(false);
     }
-    convert_episode1(sh_path, out_dir)?;
+    for episode in EPISODES {
+        convert_episode(sh_path, &episode_dir(out_dir, episode), episode)
+            .with_context(|| format!("converting episode {episode}"))?;
+    }
     crate::cache::write_stamp(out_dir, &fp)?;
     Ok(true)
 }
 
-/// Converts everything needed for a faithful, extensible Episode 1: full
-/// tileset, every shipped A*/bonus level, every backdrop, and the player +
-/// in-use actor sprites. Returns the list of level names actually converted
-/// (in file order) so the game can build its level progression from what's
-/// really on disk rather than a hardcoded (and possibly shareware-truncated)
-/// list.
-pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
+/// Converts everything needed for one episode: full tileset, every shipped
+/// main/bonus level, every backdrop, and the player + in-use actor sprites.
+/// Returns the list of level stems actually converted, in progression
+/// order, so the game can follow what's really on disk rather than a
+/// hardcoded (and possibly shareware-truncated) list.
+pub fn convert_episode(sh_path: &Path, out_dir: &Path, episode: u8) -> Result<Vec<String>> {
+    let spec = episode_spec(episode)?;
     std::fs::create_dir_all(out_dir)?;
 
     let mut zip = shell::open_installer_zip(sh_path)?;
-    let vol_bytes = shell::read_zip_entry(&mut zip, "COSMO1.VOL")?;
-    let stn_bytes = shell::read_zip_entry(&mut zip, "COSMO1.STN")?;
+    let vol_bytes = shell::read_zip_entry(&mut zip, &format!("COSMO{episode}.VOL"))?;
+    let stn_bytes = shell::read_zip_entry(&mut zip, &format!("COSMO{episode}.STN"))?;
     let vol_entries = vol::parse(&vol_bytes)?;
     let stn_entries = vol::parse(&stn_bytes)?;
     let vol_map = entries_by_name(&vol_entries);
@@ -202,24 +253,30 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
     let font_tiles = tile::decode_all_masked(&fonts_mni);
     save_atlas(&out_dir.join("font.png"), &font_tiles, FONT_ATLAS_COLS)?;
 
-    // --- Levels: convert every A*.MNI / bonus*.mni present, in a stable order ---
-    let mut level_names: Vec<&str> = vol_entries
+    // --- Levels: every <prefix>N.MNI plus this episode's two bonus stages ---
+    let mut main_levels: Vec<&str> = vol_entries
         .iter()
         .map(|e| e.name.as_str())
         .filter(|n| {
             let u = n.to_ascii_uppercase();
-            u.starts_with('A') && u.ends_with(".MNI") && u[1..u.len() - 4].parse::<u32>().is_ok()
+            u.starts_with(spec.level_prefix)
+                && u.ends_with(".MNI")
+                && u[1..u.len() - 4].parse::<u32>().is_ok()
         })
         .collect();
-    level_names.sort_by_key(|n| {
+    main_levels.sort_by_key(|n| {
         let u = n.to_ascii_uppercase();
         u[1..u.len() - 4].parse::<u32>().unwrap_or(0)
     });
-    for extra in ["BONUS1.MNI", "BONUS2.MNI"] {
-        if vol_map.contains_key(extra) {
-            level_names.push(extra);
-        }
-    }
+    let bonus_present: Vec<&str> = spec
+        .bonus_levels
+        .iter()
+        .copied()
+        .filter(|b| vol_map.contains_key(*b))
+        .collect();
+
+    let mut level_names: Vec<&str> = main_levels.clone();
+    level_names.extend(bonus_present.iter().copied());
 
     let levels_dir = out_dir.join("levels");
     std::fs::create_dir_all(&levels_dir)?;
@@ -262,6 +319,25 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
         converted.push(stem.to_ascii_lowercase());
     }
 
+    // The progression interleaves the two bonus stages after every pair of
+    // main levels (episode1.h:23-32 and its siblings). Emitting it here
+    // keeps the episode's naming scheme - A/B/C prefixes, bonus1..bonus6 -
+    // out of the game, which otherwise has to hardcode episode 1's.
+    let stem_of = |n: &str| {
+        n.trim_end_matches(".MNI")
+            .trim_end_matches(".mni")
+            .to_ascii_lowercase()
+    };
+    let mut order: Vec<String> = Vec::new();
+    for pair in main_levels.chunks(2) {
+        order.extend(pair.iter().map(|n| stem_of(n)));
+        order.extend(bonus_present.iter().map(|n| stem_of(n)));
+    }
+    std::fs::write(
+        levels_dir.join("order.json"),
+        serde_json::to_vec(&order)?,
+    )?;
+
     // --- Backdrops: every BD*.MNI in either container. These are a plain
     // 40x18 grid of individually-encoded 32-byte solid tiles (BACKDROP_SIZE
     // = 40*18*32), *not* a single plane-major fullscreen bitmap.
@@ -300,7 +376,20 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
     // --- Full-screen images ---
     let screens_dir = out_dir.join("screens");
     std::fs::create_dir_all(&screens_dir)?;
-    for name in ["TITLE1.MNI", "END1.MNI", "PRETITLE.MNI", "BONUS.MNI", "CREDIT.MNI"] {
+    // The title and end screens are per-episode (TITLE2.MNI, END3.MNI, ...)
+    // but are written under episode-neutral names so the game can ask for
+    // "the title screen" without knowing which episode is loaded. The rest
+    // are shared and keep their own names.
+    let title = format!("TITLE{episode}.MNI");
+    let end = format!("END{episode}.MNI");
+    let screens: [(&str, &str); 5] = [
+        (title.as_str(), "title"),
+        (end.as_str(), "end"),
+        ("PRETITLE.MNI", "pretitle"),
+        ("BONUS.MNI", "bonus"),
+        ("CREDIT.MNI", "credit"),
+    ];
+    for (name, stem) in screens {
         let data = if let Some(d) = vol_map.get(name) {
             *d
         } else if let Some(d) = stn_map.get(name) {
@@ -309,12 +398,7 @@ pub fn convert_episode1(sh_path: &Path, out_dir: &Path) -> Result<Vec<String>> {
             continue;
         };
         let px = tile::decode_fullscreen(data, 320, 200);
-        save_rgba(
-            &screens_dir.join(format!("{}.png", name.trim_end_matches(".MNI").to_ascii_lowercase())),
-            320,
-            200,
-            &px,
-        )?;
+        save_rgba(&screens_dir.join(format!("{stem}.png")), 320, 200, &px)?;
     }
 
     // --- Player sprite: all frames ---

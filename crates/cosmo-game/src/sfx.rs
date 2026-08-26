@@ -81,7 +81,7 @@ impl SfxAssets {
                 (
                     e.number as u16,
                     Clip {
-                        handle: asset_server.load(format!("generated/sfx/{}.wav", e.stem)),
+                        handle: asset_server.load(crate::data::asset_path(&format!("sfx/{}.wav", e.stem))),
                         priority: e.priority,
                         duration: e.ticks as f64 / TICK_HZ,
                     },

@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const MASKED_TILE_THRESHOLD: u16 = 16000;
 pub const TILE_ATTR_BLOCK_SOUTH: u8 = 0x01;
@@ -66,25 +67,76 @@ pub struct SpriteManifestJson {
     pub frames: Vec<FrameMetaJson>,
 }
 
+/// Set once when `GameData` loads, so the many `AssetServer` call sites
+/// scattered across the game don't each have to thread the episode through.
+static ASSET_PREFIX: OnceLock<String> = OnceLock::new();
+
+/// An `AssetServer`-relative path inside the loaded episode's asset tree,
+/// e.g. `asset_path("screens/title.png")`.
+pub fn asset_path(rel: &str) -> String {
+    let prefix = ASSET_PREFIX.get().map(String::as_str).unwrap_or("generated/ep1");
+    format!("{prefix}/{rel}")
+}
+
 /// Root resource: where the generated asset tree lives, and cached lookups.
 #[derive(Resource)]
 pub struct GameData {
+    /// Absolute path to the selected episode's converted assets.
     pub root: PathBuf,
+    /// Path of `root` relative to the Bevy asset root, for handing to the
+    /// `AssetServer` (which resolves its own paths, and won't take an
+    /// absolute one).
+    pub asset_prefix: String,
+    pub episode: u8,
     pub tileset: TilesetJson,
     pub tile_attrs: Vec<u8>,
 }
 
 impl GameData {
+    /// Reads the episode to load from `COSMO_EPISODE`, defaulting to 1.
+    pub fn selected_episode() -> u8 {
+        std::env::var("COSMO_EPISODE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+            .filter(|n| cosmo_assets::convert::EPISODES.contains(n))
+            .unwrap_or(1)
+    }
+
     pub fn load(assets_dir: &Path) -> Self {
-        let root = assets_dir.join("generated");
-        let tileset: TilesetJson =
-            read_json(&root.join("tileset.json")).expect("tileset.json missing - did build.rs run?");
+        Self::load_episode(assets_dir, Self::selected_episode())
+    }
+
+    pub fn load_episode(assets_dir: &Path, episode: u8) -> Self {
+        let root = assets_dir.join("generated").join(format!("ep{episode}"));
+        let tileset: TilesetJson = read_json(&root.join("tileset.json")).unwrap_or_else(|_| {
+            panic!(
+                "tileset.json missing for episode {episode} at {} - did build.rs run?",
+                root.display()
+            )
+        });
         let tile_attrs = std::fs::read(root.join("tile_attrs.bin")).unwrap_or_default();
+        let asset_prefix = format!("generated/ep{episode}");
+        let _ = ASSET_PREFIX.set(asset_prefix.clone());
         Self {
             root,
+            asset_prefix,
+            episode,
             tileset,
             tile_attrs,
         }
+    }
+
+    /// Builds an `AssetServer`-relative path inside this episode's tree,
+    /// e.g. `asset_path("screens/title.png")`.
+    pub fn asset_path(&self, rel: &str) -> String {
+        format!("{}/{}", self.asset_prefix, rel)
+    }
+
+    /// The episode's level progression, as emitted by the converter. Falls
+    /// back to whatever levels exist if the manifest is missing.
+    pub fn level_order(&self) -> Vec<String> {
+        read_json::<Vec<String>>(&self.root.join("levels").join("order.json"))
+            .unwrap_or_else(|_| self.list_levels())
     }
 
     pub fn tile_attr(&self, raw_value: u16) -> u8 {

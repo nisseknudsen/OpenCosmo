@@ -31,7 +31,7 @@ pub fn update_music(
         return;
     };
     let handle: Handle<AudioSource> =
-        asset_server.load(format!("generated/music/{track}.wav"));
+        asset_server.load(crate::data::asset_path(&format!("music/{track}.wav")));
     commands.spawn((
         AudioPlayer(handle),
         PlaybackSettings::LOOP,

@@ -138,11 +138,11 @@ fn spawn_fullscreen_image(commands: &mut Commands, asset_server: &AssetServer, p
 }
 
 pub fn spawn_title(mut commands: Commands, asset_server: Res<AssetServer>) {
-    spawn_fullscreen_image(&mut commands, &asset_server, "generated/screens/title1.png");
+    spawn_fullscreen_image(&mut commands, &asset_server, &crate::data::asset_path("screens/title.png"));
 }
 
 pub fn spawn_credits(mut commands: Commands, asset_server: Res<AssetServer>) {
-    spawn_fullscreen_image(&mut commands, &asset_server, "generated/screens/credit.png");
+    spawn_fullscreen_image(&mut commands, &asset_server, &crate::data::asset_path("screens/credit.png"));
 }
 
 /// Any key returns to the menu.
@@ -189,7 +189,7 @@ pub fn spawn_menu(
                 // already on screen, which coming from the title is the
                 // title art.
                 screen.spawn((
-                    ImageNode::new(asset_server.load("generated/screens/title1.png")),
+                    ImageNode::new(asset_server.load(&crate::data::asset_path("screens/title.png"))),
                     tile_node(0.0, 0.0, SCREEN_W_TILES, SCREEN_H_TILES),
                 ));
                 // The frame's solid background. One stretched copy of the
