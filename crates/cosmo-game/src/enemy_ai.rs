@@ -60,6 +60,22 @@ pub enum EnemyKind {
     Pyramid,
     /// `ActJumpPad` (game1.c:2026-2046).
     JumpPad,
+    /// `ActMoon` (game1.c:2748-2763).
+    Moon,
+    /// `ActSmallFlame` (game1.c:4891-4897).
+    SmallFlame,
+    /// `ActFlamePulse` (game1.c:5545-5567).
+    FlamePulse,
+    /// `ActBabyGhost` (game1.c:2870-2915).
+    BabyGhost,
+    /// `ActSpittingTurret` (game1.c:4164-4236).
+    SpittingTurret,
+    /// `ActRedJumper` (game1.c:3493-3600). Episodes 2 and 3 only -
+    /// `HAS_ACT_RED_JUMPER` is defined in episode{2,3}.h and commented out
+    /// in episode1.h, so the whole body compiles away for episode 1.
+    RedJumper,
+    /// `ActSmokeEmitter` (game1.c:5598-5611).
+    SmokeEmitter,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -98,6 +114,14 @@ impl EnemyKind {
             // than any creature and is never destroyed (game1.c:7097-7106),
             // so it gets an effectively unlimited hit count.
             EnemyKind::JumpPad => (40, i32::MAX),
+            // Grouped with the ghost in the pounce switch, and likewise
+            // decrements data5 to zero; ConstructActor starts it at 4.
+            EnemyKind::Moon => (7, 4),
+            // Grouped with the suction walker and bird - dies outright.
+            EnemyKind::BabyGhost => (7, 1),
+            // The stiffest creature in the game: a harder kick back and
+            // seven pounces to kill (game1.c:7226-7241, data5 starts at 7).
+            EnemyKind::RedJumper => (15, 7),
             _ => return None,
         };
         Some(PounceSpec { recoil, hits })
@@ -159,10 +183,30 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (2, EnemyKind::JumpPad, [0, 0, 0, 0, 0]),              // ACT_JUMP_PAD_FLOOR
     // The ceiling variant also seeds d3/d4 from its own y - see Enemy::new.
     (217, EnemyKind::JumpPad, [0, 0, 0, 0, 1]),            // ACT_JUMP_PAD_CEIL
+    (54, EnemyKind::Moon, [0, 0, 0, 0, 4]),                // ACT_MOON
+    (151, EnemyKind::SmallFlame, [0, 0, 0, 0, 0]),         // ACT_SMALL_FLAME
+    // The west variant also spawns one column left - see Enemy::new.
+    (233, EnemyKind::FlamePulse, [0, 0, 0, 0, 1]),         // ACT_FLAME_PULSE_W
+    (234, EnemyKind::FlamePulse, [0, 0, 0, 0, 0]),         // ACT_FLAME_PULSE_E
+    (65, EnemyKind::BabyGhost, [DIR2_SOUTH, 0, 0, 0, 0]),  // ACT_BABY_GHOST
+    // d3 remembers the spawn column, which the turret snaps back to as it
+    // aims; seeded from x in Enemy::new.
+    (113, EnemyKind::SpittingTurret, [0, 10, 0, 0, 3]),    // ACT_SPITTING_TURRET
+    (101, EnemyKind::RedJumper, [0, 0, 0, 0, 7]),          // ACT_RED_JUMPER
+    // Same kind as ACT_PYRAMID_FLOOR, told apart by d5: the floor variant
+    // sets it and is inert scenery, this one leaves it clear and falls.
+    // It also spawns one row lower - see Enemy::new.
+    (49, EnemyKind::Pyramid, [0, 0, 0, 0, 0]),             // ACT_PYRAMID_FALLING
+    (248, EnemyKind::SmokeEmitter, [0, 0, 0, 0, 1]),       // ACT_SMOKE_EMIT_SMALL
+    (249, EnemyKind::SmokeEmitter, [1, 0, 0, 0, 0]),       // ACT_SMOKE_EMIT_LARGE
 ];
 
 const DIR2_WEST: i32 = 0;
 const DIR2_EAST: i32 = 1;
+/// The same two values under the north/south naming the baby ghost uses
+/// (def.h:31-34) - DIR2_* is one enum reused for both axes.
+const DIR2_SOUTH: i32 = 0;
+const DIR2_NORTH: i32 = 1;
 
 /// `DRAW_MODE_FLIPPED` (def.h:77) - flipped vertically, not horizontally.
 const DRAW_MODE_FLIPPED: i32 = 4;
@@ -207,6 +251,9 @@ pub struct Enemy {
     /// but cannot be pounced at all (game1.c:7096).
     pub pounce_hits: i32,
     pub pounce_recoil: i32,
+    /// `Actor.weighted` - ConstructActor's third bool. Weighted actors get
+    /// the shared gravity pass before their own tick (game1.c:7868).
+    pub weighted: bool,
     pub frames: Vec<Handle<Image>>,
     /// Per-actor PRNG state - see `next_rand`.
     rng: u32,
@@ -225,6 +272,11 @@ impl Enemy {
         // ConstructActor marks the cabbage and parachute ball as acrophile
         // (game1.c:5691, 5843); everything else ported here is not.
         let acrophile = matches!(kind, EnemyKind::Cabbage | EnemyKind::ParachuteBall);
+        // Only the baby ghost opts into the shared gravity pass so far.
+        // Several already-ported actors are weighted in the original too,
+        // but their current behaviour is verified as-is and retro-fitting
+        // gravity to them would change it - left for a deliberate pass.
+        let weighted = matches!(kind, EnemyKind::BabyGhost);
         let spec = kind.pounce_spec();
         let mut pounce_hits = spec.map(|s| s.hits).unwrap_or(0);
         let pounce_recoil = spec.map(|s| s.recoil).unwrap_or(0);
@@ -237,10 +289,25 @@ impl Enemy {
             data[3] = y + 3;
             pounce_hits = 0;
         }
+        // Spawn offsets baked into the original's ConstructActor calls.
+        // Both variants below share a kind with a sibling that has no
+        // offset, so they're told apart by d5 rather than by a table column.
+        let mut y = y;
+        let mut x = x;
+        if kind == EnemyKind::Pyramid && data[4] == 0 {
+            y += 1; // ACT_PYRAMID_FALLING (game1.c: `x, y + 1`)
+        }
+        if kind == EnemyKind::FlamePulse && data[4] != 0 {
+            x -= 1; // ACT_FLAME_PULSE_W (game1.c: `x - 1, y`)
+        }
+        if kind == EnemyKind::SpittingTurret {
+            data[2] = x; // d3 = spawn column, the turret's rest position
+        }
         Enemy {
             kind,
             pounce_hits,
             pounce_recoil,
+            weighted,
             x,
             y,
             frame: 0,
@@ -453,6 +520,290 @@ fn tick_jump_pad(e: &mut Enemy) {
     }
 }
 
+/// Port of the `weighted` gravity block in `ProcessActor`
+/// (game1.c:7868-7896), which runs *before* an actor's own tick function.
+/// Actors flagged `weighted` in `ConstructActor` don't move themselves
+/// downward - this does it for them, ramping the fall over five ticks.
+fn apply_gravity(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    let (w, h) = (e.width_tiles, e.height_tiles);
+    let south_free =
+        |x: i32, y: i32| test_sprite_move(Dir4::South, x, y, w, h, level, data) == MoveResult::Free;
+
+    // Embedded in the floor - lift back out.
+    if !south_free(e.x, e.y) {
+        e.y -= 1;
+        e.fall_time = 0;
+    }
+
+    if south_free(e.x, e.y + 1) {
+        if e.fall_time < 5 {
+            e.fall_time += 1;
+        }
+        if e.fall_time > 1 && e.fall_time < 6 {
+            e.y += 1;
+        }
+        if e.fall_time == 5 {
+            if !south_free(e.x, e.y + 1) {
+                e.fall_time = 0;
+            } else {
+                e.y += 1;
+            }
+        }
+    } else {
+        e.fall_time = 0;
+    }
+}
+
+/// `ActMoon` (game1.c:2748-2763). Bobs between two frames on every second
+/// tick, choosing the pair that faces the player.
+fn tick_moon(e: &mut Enemy, player: &Player) {
+    e.d3 = if e.d3 == 0 { 1 } else { 0 };
+    if e.d3 != 0 {
+        return;
+    }
+
+    e.d2 += 1;
+    e.frame = if e.x < player.x {
+        (e.d2.rem_euclid(2) + 2) as usize
+    } else {
+        e.d2.rem_euclid(2) as usize
+    };
+}
+
+/// `ActSmallFlame` (game1.c:4891-4897). A six-frame loop, nothing else.
+fn tick_small_flame(e: &mut Enemy) {
+    e.frame += 1;
+    if e.frame == 6 {
+        e.frame = 0;
+    }
+}
+
+/// `ActFlamePulse` (game1.c:5545-5567). Burns through a sixteen-step frame
+/// table, then hides for thirty ticks before firing again.
+///
+/// NOT PORTED: the smoke decoration emitted as the flame peaks (needs
+/// `NewDecoration`) and `SND_FLAME_PULSE`.
+fn tick_flame_pulse(e: &mut Enemy) {
+    const FRAMES: [usize; 16] = [0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 1, 0];
+
+    if e.d1 == 0 {
+        e.frame = FRAMES[e.d2.clamp(0, 15) as usize];
+        e.d2 += 1;
+        if e.d2 == 16 {
+            e.d1 = 30;
+            e.d2 = 0;
+        }
+    } else {
+        // Drawn hidden for the whole cooldown - see `draws_hidden`.
+        e.d1 -= 1;
+    }
+}
+
+/// `ActBabyGhost` (game1.c:2870-2915). Hops: falls under the shared gravity
+/// pass until it lands, pauses, then rises four rows and falls again.
+///
+/// The original toggles `Actor.weighted` to switch between falling and
+/// rising; `apply_gravity` reads the same flag here.
+///
+/// NOT PORTED: `SND_BABY_GHOST_LAND` and `SND_BABY_GHOST_JUMP`.
+fn tick_baby_ghost(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    let (w, h) = (e.width_tiles, e.height_tiles);
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    } else if e.d1 == DIR2_SOUTH {
+        if test_sprite_move(Dir4::South, e.x, e.y + 1, w, h, level, data) != MoveResult::Free {
+            // Landed: stop falling and wind up for the next hop.
+            e.weighted = false;
+            e.d1 = DIR2_NORTH;
+            e.d4 = 3;
+            e.d2 = 4;
+            e.frame = 1;
+            e.d3 = 1;
+        } else if e.d5 == 0 {
+            e.frame = 1;
+            if e.d3 == 0 {
+                e.d4 += 1;
+            }
+        } else {
+            e.d5 -= 1;
+        }
+    } else if e.d1 == DIR2_NORTH {
+        e.y -= 1;
+        e.frame = 0;
+        e.d2 -= 1;
+        if e.d2 == 0 {
+            e.d1 = DIR2_SOUTH;
+            e.d5 = 3;
+            e.weighted = true;
+        }
+    }
+}
+
+/// `ActSpittingTurret` (game1.c:4164-4236). Tracks the player through five
+/// firing arcs, snapping between two columns as it turns, then rests.
+///
+/// NOT PORTED: the projectiles themselves. The original spawns an
+/// `ACT_PROJECTILE_*` actor at frames 2/5/8/11/14; actor-spawns-actor isn't
+/// available here, so the turret aims and animates but nothing leaves it.
+fn tick_spitting_turret(e: &mut Enemy, player: &Player) {
+    e.d2 -= 1;
+    if e.d2 == 0 {
+        e.d1 += 1;
+        e.d2 = 3;
+        if e.d1 != 3 {
+            e.frame += 1;
+            // NOT PORTED: frames 2, 5, 8, 11 and 14 each launch a
+            // projectile west / south-west / south / south-east / east.
+        }
+    }
+
+    if e.d1 == 0 {
+        if e.y >= player.y - 2 {
+            if e.x + 1 > player.x {
+                e.frame = 0; // west
+                e.x = e.d3;
+            } else if e.x + 2 <= player.x {
+                e.frame = 12; // east
+                e.x = e.d3 + 1;
+            }
+        } else {
+            if e.x - 2 > player.x {
+                e.frame = 3; // south-west
+                e.x = e.d3;
+            } else if e.x + 3 < player.x {
+                e.frame = 9; // south-east
+                e.x = e.d3 + 1;
+            } else if e.x - 2 < player.x && e.x + 3 >= player.x {
+                e.frame = 6; // south
+                e.x = e.d3 + 1;
+            }
+            // A separate check rather than folding into the chain above,
+            // matching the original's own redundant branch.
+            if e.x - 2 == player.x {
+                e.frame = 6;
+                e.x = e.d3 + 1;
+            }
+        }
+    }
+
+    if e.d1 == 3 {
+        e.d2 = 27;
+        e.d1 = 0;
+    }
+
+    if e.frame > 14 {
+        e.frame = 14;
+    }
+}
+
+/// `ActRedJumper` (game1.c:3493-3600). Crouches while facing the player,
+/// then launches along a fixed arc, drifting horizontally as it flies.
+///
+/// `d2` indexes a table whose even entries are the per-tick vertical delta
+/// and whose odd entries are the frame offset, so it advances two at a time.
+/// `d1` is the facing (0 west, 3 east) and doubles as the frame base.
+///
+/// NOT PORTED: `SND_RED_JUMPER_JUMP` and `SND_RED_JUMPER_LAND`.
+fn tick_red_jumper(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    const JUMP: [i32; 42] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, -2, 2, -2, 2, -2, 2, -2, 2, -1, 2,
+        -1, 2, -1, 2, 0, 2, 0, 2, 1, 1, 1, 1, 1, 1,
+    ];
+    let (w, h) = (e.width_tiles, e.height_tiles);
+    let free = |dir, x, y| test_sprite_move(dir, x, y, w, h, level, data) == MoveResult::Free;
+    let frame_at = |d1: i32, idx: i32| (d1 + JUMP[idx.clamp(0, 41) as usize]).max(0) as usize;
+
+    if e.d2 < 5 {
+        e.d1 = if e.x > player.x { 0 } else { 3 };
+    } else if e.d2 > 16 && e.d2 < 39 {
+        if e.d1 == 0 && free(Dir4::West, e.x - 1, e.y) {
+            e.x -= 1;
+        } else if e.d1 == 3 && free(Dir4::East, e.x + 1, e.y) {
+            e.x += 1;
+        }
+    }
+
+    // Descending tail of the arc: two rows a tick while there's room.
+    if e.d2 > 39 {
+        // The original's second test pre-increments y, so the step happens
+        // even when that test then fails.
+        let first = free(Dir4::South, e.x, e.y + 1);
+        let second = if first {
+            e.y += 1;
+            free(Dir4::South, e.x, e.y + 1)
+        } else {
+            false
+        };
+        if first && second {
+            e.y += 1;
+            e.frame = frame_at(e.d1, e.d2 + 1);
+            if e.d2 < 39 {
+                e.d2 += 2;
+            }
+        } else {
+            e.d2 = 0;
+        }
+        return;
+    }
+
+    match JUMP[e.d2.clamp(0, 41) as usize] {
+        -1 => {
+            if free(Dir4::North, e.x, e.y - 1) {
+                e.y -= 1;
+            } else {
+                e.d2 = 34;
+            }
+        }
+        -2 => {
+            for _ in 0..2 {
+                if free(Dir4::North, e.x, e.y - 1) {
+                    e.y -= 1;
+                } else {
+                    e.d2 = 34;
+                }
+            }
+        }
+        1 => {
+            if free(Dir4::South, e.x, e.y + 1) {
+                e.y += 1;
+            }
+        }
+        2 => {
+            let first = free(Dir4::South, e.x, e.y - 1);
+            let second = if first {
+                e.y += 1;
+                free(Dir4::South, e.x, e.y - 1)
+            } else {
+                false
+            };
+            if first && second {
+                e.y += 1;
+            } else {
+                e.d2 = 0;
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    e.frame = frame_at(e.d1, e.d2 + 1);
+    if e.d2 < 39 {
+        e.d2 += 2;
+    }
+}
+
+/// `ActSmokeEmitter` (game1.c:5598-5611). An invisible marker that puffs
+/// smoke roughly one tick in thirty-two.
+///
+/// NOT PORTED: the smoke itself (needs `NewDecoration`), which is all this
+/// actor does - so it is currently an invisible no-op. That is still the
+/// right rendering: the original never draws the emitter either, and
+/// leaving it out of the table would show a stray sprite instead.
+fn tick_smoke_emitter(e: &mut Enemy) {
+    e.d1 = e.next_rand(32) as i32;
+}
+
 pub fn tick_enemies(
     mut query: Query<(&mut Enemy, &mut Transform, &mut Sprite, &mut Visibility)>,
     player_q: Query<&Player>,
@@ -472,6 +823,12 @@ pub fn tick_enemies(
             continue;
         }
 
+        // The shared gravity pass runs before the actor's own tick, as it
+        // does in ProcessActor (game1.c:7868, ahead of `act->tickfunc`).
+        if e.weighted {
+            apply_gravity(&mut e, &level, &data);
+        }
+
         match e.kind {
             EnemyKind::Prize => tick_prize(&mut e),
             EnemyKind::RoamerSlug => tick_roamer_slug(&mut e, &level, &data),
@@ -488,6 +845,13 @@ pub fn tick_enemies(
             EnemyKind::FallingFloor => tick_falling_floor(&mut e, player, &level, &data),
             EnemyKind::Pyramid => tick_pyramid(&mut e, player, &level, &data),
             EnemyKind::JumpPad => tick_jump_pad(&mut e),
+            EnemyKind::Moon => tick_moon(&mut e, player),
+            EnemyKind::SmallFlame => tick_small_flame(&mut e),
+            EnemyKind::FlamePulse => tick_flame_pulse(&mut e),
+            EnemyKind::BabyGhost => tick_baby_ghost(&mut e, &level, &data),
+            EnemyKind::SpittingTurret => tick_spitting_turret(&mut e, player),
+            EnemyKind::RedJumper => tick_red_jumper(&mut e, player, &level, &data),
+            EnemyKind::SmokeEmitter => tick_smoke_emitter(&mut e),
         }
 
         // Presentation. `frame` is clamped rather than trusted: a few
@@ -514,7 +878,22 @@ pub fn tick_enemies(
             Some(DIR2_EAST) => -1.0,
             _ => 1.0,
         };
-        *visibility = Visibility::Inherited;
+        *visibility = if draws_hidden(&e) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+}
+
+/// Actors the original marks `DRAW_MODE_HIDDEN` for this tick.
+fn draws_hidden(e: &Enemy) -> bool {
+    match e.kind {
+        // Never drawn at all - it only spawns smoke (game1.c:5602).
+        EnemyKind::SmokeEmitter => true,
+        // Hidden for the whole cooldown between pulses (game1.c:5565).
+        EnemyKind::FlamePulse => e.d1 != 0,
+        _ => false,
     }
 }
 
