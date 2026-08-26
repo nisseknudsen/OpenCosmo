@@ -22,13 +22,10 @@ pub struct ExitTrigger {
 pub struct Collectible {
     pub x: i32,
     pub y: i32,
-    pub act_id: u16,
+    /// The `SPR_*` this actor draws as - what `pickups::pickup_for_sprite`
+    /// keys on, since the original's pickup switch is sprite-keyed too.
+    pub spr: u16,
 }
-
-/// ACT_STAR_FLOAT=1, ACT_STAR=264 - the original tracks these in a
-/// separate "Stars" status-bar counter (`gameStars`, game2.c:1249),
-/// distinct from Score.
-pub const STAR_ACT_IDS: [u16; 2] = [1, 264];
 
 /// A BASKET_*/BARREL_* container - breaks when the player lands on top of
 /// it, revealing/granting whatever `contents` (an ACT_* id) it holds. See
@@ -40,23 +37,6 @@ pub struct Container {
     pub y: i32,
     pub contents: u16,
 }
-
-/// `ACT_*` ids for the plain food/gem pickups (excludes their BASKET_*/
-/// BARREL_* container variants and animated slime hazards). From actor.h:
-/// ACT_STAR_FLOAT=1, ACT_GRN_TOMATO=32, ACT_RED_TOMATO=34, ACT_GRN_GOURD=135,
-/// ACT_POD=137, ACT_RED_BERRIES=141, ACT_BLU_CRYSTAL=154,
-/// ACT_RED_CRYSTAL_FLOOR=155, ACT_GRN_TOMATO_FLOAT=159,
-/// ACT_RED_TOMATO_FLOAT=160, ACT_REDGRN_BERRIES=170, ACT_RED_GOURD=172,
-/// ACT_CLR_DIAMOND=176, ACT_CYA_DIAMOND=194, ACT_RED_DIAMOND=196,
-/// ACT_CYA_DIAMOND_FLOAT=213, ACT_RED_DIAMOND_FLOAT=214,
-/// ACT_RED_LEAFY_FLOAT=225, ACT_RED_LEAFY=226, ACT_RED_CRYSTAL_CEIL=252,
-/// ACT_STAR=264. ACT_BOMB_IDLE=57 rides along here so it spawns as a
-/// pickup, but `combat::collect_bombs` claims it instead of the scoring
-/// path - it stocks the bomb counter rather than awarding points.
-pub const COLLECTIBLE_ACT_IDS: [u16; 22] = [
-    1, 32, 34, 57, 135, 137, 141, 154, 155, 159, 160, 170, 172, 176, 194, 196, 213, 214, 225,
-    226, 252, 264,
-];
 
 /// `ACT_*` ids (map_type - 31) that end a level on player contact
 /// (actor.h: ACT_EXIT_MONSTER_W=149, ACT_EXIT_MONSTER_N=247,
@@ -319,11 +299,11 @@ pub fn spawn_level_actors(
                 y: a.y as i32,
             });
         }
-        if COLLECTIBLE_ACT_IDS.contains(&act_type) {
+        if crate::pickups::pickup_for_sprite(sprite_type).is_some() {
             entity.insert(Collectible {
                 x: a.x as i32,
                 y: a.y as i32,
-                act_id: act_type,
+                spr: sprite_type,
             });
         }
         if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {

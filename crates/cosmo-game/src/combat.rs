@@ -21,9 +21,6 @@ use bevy::prelude::*;
 
 const POUNCE_SCORE: u32 = 100;
 
-/// ACT_BOMB_IDLE - the collectible bomb that stocks the status bar counter.
-pub const ACT_BOMB_IDLE: u16 = 57;
-
 /// Ticks a placed bomb sits before detonating. `ActBombArmed` advances a
 /// 4-frame fuse every 5 ticks and then counts 10 more at the last frame.
 const BOMB_FUSE_TICKS: u32 = 30;
@@ -159,26 +156,6 @@ pub fn pounce_containers(
         );
         score.0 += POUNCE_SCORE;
         break;
-    }
-}
-
-/// Picking up an ACT_BOMB_IDLE stocks the bomb counter instead of scoring.
-pub fn collect_bombs(
-    mut commands: Commands,
-    mut player_q: Query<&mut Player>,
-    pickups: Query<(Entity, &Collectible)>,
-) {
-    let Ok(mut player) = player_q.single_mut() else {
-        return;
-    };
-    for (entity, pickup) in &pickups {
-        if pickup.act_id != ACT_BOMB_IDLE {
-            continue;
-        }
-        if (pickup.x - player.x).abs() <= 2 && (pickup.y - player.y).abs() <= 3 {
-            commands.entity(entity).despawn();
-            player.bombs += 1;
-        }
     }
 }
 

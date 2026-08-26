@@ -9,6 +9,7 @@ mod enemy_ai;
 mod flow;
 mod hud;
 mod level;
+mod pickups;
 mod player;
 mod screen;
 mod tileset;
@@ -84,7 +85,6 @@ fn main() {
                 combat::pounce_enemies,
                 combat::pounce_containers,
                 enemy::hazard_damage,
-                combat::collect_bombs,
                 combat::place_bomb,
                 combat::tick_bombs,
                 effects::tick_explosions,

@@ -20,25 +20,64 @@ pub struct Stars(pub u32);
 
 pub fn collect_pickups(
     mut commands: Commands,
+    effects: Res<crate::effects::EffectAssets>,
     mut score: ResMut<Score>,
     mut stars: ResMut<Stars>,
-    player_q: Query<&Player>,
+    mut player_q: Query<&mut Player>,
     pickup_q: Query<(Entity, &Collectible)>,
 ) {
-    let Ok(player) = player_q.single() else {
+    let Ok(mut player) = player_q.single_mut() else {
         return;
     };
     for (entity, c) in &pickup_q {
-        if c.act_id == crate::combat::ACT_BOMB_IDLE {
-            continue; // stocked by combat::collect_bombs, not scored
+        let Some(pickup) = crate::pickups::pickup_for_sprite(c.spr) else {
+            continue;
+        };
+        if (c.x - player.x).abs() > 2 || (c.y - player.y).abs() > 3 {
+            continue;
         }
-        if (c.x - player.x).abs() <= 2 && (c.y - player.y).abs() <= 3 {
-            commands.entity(entity).despawn();
-            if actors::STAR_ACT_IDS.contains(&c.act_id) {
-                stars.0 += 1;
-            } else {
-                score.0 += 100;
+        commands.entity(entity).despawn();
+
+        // Each kind pays out differently; only plain score and the
+        // power-up's payout raise a score pop-up.
+        let awarded = match pickup {
+            crate::pickups::Pickup::Score(points) => {
+                score.0 += points;
+                Some(points)
             }
+            crate::pickups::Pickup::Star => {
+                stars.0 += 1;
+                None
+            }
+            crate::pickups::Pickup::Bomb => {
+                // The original caps the counter at 9 (game1.c:7561).
+                if player.bombs <= 8 {
+                    player.bombs += 1;
+                }
+                score.0 += 100;
+                Some(100)
+            }
+            crate::pickups::Pickup::Hamburger => {
+                if player.health_cells < 5 {
+                    player.health_cells += 1;
+                }
+                score.0 += 12800;
+                Some(12800)
+            }
+            crate::pickups::Pickup::PowerUp => {
+                // Heals while hurt, otherwise pays out (game1.c:7480-7488).
+                if player.health <= player.health_cells as i32 {
+                    player.health += 1;
+                    score.0 += 100;
+                    Some(100)
+                } else {
+                    score.0 += 12800;
+                    Some(12800)
+                }
+            }
+        };
+        if let Some(points) = awarded {
+            crate::effects::spawn_score_effect(&mut commands, &effects, points, c.x, c.y);
         }
     }
 }
