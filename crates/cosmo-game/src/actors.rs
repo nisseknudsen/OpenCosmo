@@ -84,6 +84,7 @@ fn spawn_hint_globe(
     data: &GameData,
     x: i32,
     y: i32,
+    hint: u16,
 ) {
     let rel_dir = format!("sprites/actors/{SPR_HINT_GLOBE}");
     let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
@@ -143,6 +144,15 @@ fn spawn_hint_globe(
             step: 0,
             timer: 0.0,
             interval: 0.3,
+        },
+        // The touch test is against the *orb*, not the pedestal
+        // (game1.c:4469), so the trigger lives on this entity.
+        crate::hints::HintGlobe {
+            x,
+            y: orb_row,
+            width_tiles: (orb_meta.width_px as f32 / 8.0).ceil() as i32,
+            height_tiles: orb_h_tiles as i32,
+            hint,
         },
         LevelScoped,
     ));
@@ -239,7 +249,10 @@ pub fn spawn_level_actors(
             .unwrap_or(act_type);
 
         if sprite_type == SPR_HINT_GLOBE {
-            spawn_hint_globe(commands, asset_server, data, a.x as i32, a.y as i32);
+            // Every ACT_HINT_GLOBE_* draws the same sprite; which message
+            // it holds is carried by the actor id alone.
+            let hint = crate::hints::hint_number_for_actor(act_type).unwrap_or(0);
+            spawn_hint_globe(commands, asset_server, data, a.x as i32, a.y as i32, hint);
             continue;
         }
         if sprite_type == SPR_EYE_PLANT {

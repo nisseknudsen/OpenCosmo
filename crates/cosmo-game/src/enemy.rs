@@ -100,9 +100,11 @@ pub fn move_walkers(
         );
         t.translation.x = world.x;
         t.translation.y = world.y;
-        // Sprite art faces the *opposite* of its map/movement convention
-        // (mirrors the player's own PLAYER_BASE_WEST=0 default) - negate.
-        t.scale.x = -w.dir as f32;
+        // Deliberately no horizontal mirroring: the original has none (see
+        // the note in `enemy_ai::tick_enemies`). These fallback walkers
+        // have no ported frame selection either, so they simply cycle
+        // their sprite's own frames - wrong for facing, but not *reversed*,
+        // which mirroring made them.
     }
 }
 
@@ -151,10 +153,16 @@ pub fn hazard_damage(
         return;
     }
 
+    // `HurtPlayer` (game1.c:6900-6929). Taking a hit lets go of any wall.
+    player.cling_dir = None;
     player.health -= 1;
-    sfx.write(PlaySfx(snd::PLAYER_HURT));
-    player.hurt_cooldown = 44; // matches HurtPlayer()'s cooldown, game1.c:6927
     if player.health <= 0 {
-        player.dead_timer = 1; // player::update_death() plays the animation and respawns
+        // The hurt sound and the invincibility cooldown are the *else*
+        // branch: a fatal hit goes straight into the death animation, which
+        // plays its own hurt sound on its first tick and its jingle later.
+        player.dead_timer = 1;
+    } else {
+        sfx.write(PlaySfx(snd::PLAYER_HURT));
+        player.hurt_cooldown = 44;
     }
 }

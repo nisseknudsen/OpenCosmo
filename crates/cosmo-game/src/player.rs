@@ -42,8 +42,6 @@ pub struct Player {
     pub cmd_jump_latch: bool,
     pub can_cling: bool,
     pub frame: usize,
-    pub anim_timer: f32,
-    pub on_ground: bool,
     /// Starting value 4 (game1.c:10580). HurtPlayer() decrements on
     /// contact damage; 0 triggers a respawn (our simplified stand-in for
     /// death) in enemy.rs::hazard_damage.
@@ -65,6 +63,17 @@ pub struct Player {
     /// a successful pounce launches the player into (game1.c:8698-8721).
     pub recoil_left: i32,
     pub is_recoiling: bool,
+    /// `clingslip` - set for the ticks where the player is sliding down a
+    /// clingable-but-slippery wall. A local in the original's `MovePlayer`,
+    /// but the scroll-follow that reads it lives in a different system here.
+    pub cling_slip: bool,
+    /// `movecount` (game1.c:8441) - drives the walk cycle at half tick rate.
+    pub move_count: u32,
+    /// `idlecount` (game1.c:8440) - how long the player has stood still,
+    /// which schedules the blink/look-around/head-shake idle animations.
+    pub idle_count: u32,
+    /// Stand-in for `random()`, used only for idle animation jitter.
+    rng: u32,
 }
 
 impl Player {
@@ -80,8 +89,6 @@ impl Player {
             cmd_jump_latch: false,
             can_cling: false,
             frame: 0,
-            anim_timer: 0.0,
-            on_ground: false,
             health: 4,
             hurt_cooldown: 0,
             dead_timer: 0,
@@ -89,6 +96,32 @@ impl Player {
             health_cells: 3,
             recoil_left: 0,
             is_recoiling: false,
+            cling_slip: false,
+            move_count: 0,
+            idle_count: 0,
+            rng: 0x1337_beef,
+        }
+    }
+
+    fn next_rand(&mut self, modulo: u32) -> u32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        if modulo == 0 {
+            0
+        } else {
+            self.rng % modulo
+        }
+    }
+
+    /// `playerBaseFrame` - which of the two 23-frame facing blocks the
+    /// local frame index is taken from (player.h:24-25). The original keeps
+    /// this as its own variable but every site in `MovePlayer` moves it in
+    /// lockstep with `playerFaceDir`, so it is derived here instead.
+    pub fn base_frame(&self) -> usize {
+        match self.face_dir {
+            FaceDir::West => 0,
+            FaceDir::East => 23,
         }
     }
 
@@ -112,7 +145,7 @@ impl Player {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct PlayerInput {
     pub west: bool,
     pub east: bool,
@@ -120,13 +153,70 @@ pub struct PlayerInput {
     pub look_up: bool,
     pub look_down: bool,
     pub bomb: bool,
+    /// "Any key", for dismissing a modal frame. Only ever set by a scripted
+    /// run (`k` in `COSMO_INPUT`); live play reads the keyboard directly,
+    /// since a real tap can fall between two 18.2Hz ticks.
+    pub dismiss: bool,
+}
+
+/// A scripted input sequence for `COSMO_INPUT`, so a mechanic can be
+/// exercised deterministically instead of hoping a playthrough happens to
+/// hit it. The format is comma-separated `<keys><ticks>` steps, where each
+/// key is one of `w`/`e` (west/east), `u`/`d` (look up/down), `j` (jump),
+/// `b` (bomb), `k` (dismiss an open text frame), or `.` (nothing):
+/// `COSMO_INPUT="e40,.10,u60,d60"` walks east, stands still, then looks up
+/// and back down.
+pub struct InputScript(Vec<(PlayerInput, u32)>);
+
+impl InputScript {
+    pub fn parse(spec: &str) -> Self {
+        let mut steps = Vec::new();
+        for step in spec.split(',').filter(|s| !s.trim().is_empty()) {
+            let step = step.trim();
+            let split = step.find(|c: char| c.is_ascii_digit()).unwrap_or(step.len());
+            let (keys, count) = step.split_at(split);
+            let count: u32 = count.parse().unwrap_or(1);
+            steps.push((
+                PlayerInput {
+                    west: keys.contains('w'),
+                    east: keys.contains('e'),
+                    jump: keys.contains('j'),
+                    look_up: keys.contains('u'),
+                    look_down: keys.contains('d'),
+                    bomb: keys.contains('b'),
+                    dismiss: keys.contains('k'),
+                },
+                count,
+            ));
+        }
+        InputScript(steps)
+    }
+
+    /// The state at tick `t`; the final step holds once the script runs out.
+    pub fn at(&self, t: u32) -> PlayerInput {
+        let mut remaining = t;
+        for (state, count) in &self.0 {
+            if remaining < *count {
+                return state.clone();
+            }
+            remaining -= count;
+        }
+        self.0.last().map(|(s, _)| s.clone()).unwrap_or_default()
+    }
 }
 
 pub fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut input: ResMut<PlayerInput>,
     mut tick: Local<u32>,
+    mut script: Local<Option<InputScript>>,
 ) {
+    if let Ok(spec) = std::env::var("COSMO_INPUT") {
+        let script = script.get_or_insert_with(|| InputScript::parse(&spec));
+        *input = script.at(*tick);
+        *tick += 1;
+        return;
+    }
     if std::env::var("COSMO_AUTOPLAY").is_ok() {
         input.west = false;
         input.east = true;
@@ -245,6 +335,7 @@ pub fn move_player_tick(
     input: Res<PlayerInput>,
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
+    mut scroll: ResMut<crate::camera::Scroll>,
     mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut p) = query.single_mut() else {
@@ -257,92 +348,146 @@ pub fn move_player_tick(
         return;
     };
     let mut dummy_cling = false;
+    p.move_count = p.move_count.wrapping_add(1);
+    p.cling_slip = false;
 
-    // --- Horizontal movement ---
-    // NOTE: the original (game1.c:8606-8687) moves speculatively first
-    // (decrements playerX immediately when already facing the movement
-    // direction) then tests collision at the *new* position, reverting on
-    // block - and has a documented uninitialized-variable bug in its slope
-    // handling along that path. This is a test-before-move rewrite that
-    // reaches the same outcome (blocked at walls, free otherwise, steps up
-    // one row on a slope) without replicating that UB; worth revisiting if
-    // a one-tile boundary discrepancy against the original ever matters.
-    // `southmove` is probed *before* stepping, exactly as the original does
-    // (game1.c:8607, 8648). It is what distinguishes walking down a slope
-    // from walking off a ledge.
-    let southmove_pre = test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling);
-
-    if input.west && p.cling_dir.is_none() && !input.east {
-        if p.face_dir == FaceDir::West {
-            if p.x > 0 {
-                let m = test_move(Direction::West, p.x, p.y, &level, &data, &mut p.can_cling);
-                if m == MoveResult::Blocked {
-                    if test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
-                        == MoveResult::Free
-                        && p.can_cling
-                    {
-                        sfx.write(PlaySfx(snd::PLAYER_CLING));
-                        p.cling_dir = Some(FaceDir::West);
-                        p.is_falling = false;
-                        p.jump_time = 0;
-                        p.fall_time = 0;
-                        p.cmd_jump_latch = input.jump;
-                    }
-                } else {
-                    p.x -= 1;
-                    if m == MoveResult::Sloped {
-                        // Walking *up* a slope.
-                        p.y -= 1;
-                    } else if southmove_pre == MoveResult::Sloped
-                        && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
-                            == MoveResult::Free
-                    {
-                        // Walking *down* one (game1.c:8638-8645). Clearing
-                        // the falling flag here is what keeps jumping
-                        // possible on a descent - without it the player
-                        // reads as airborne every tick and the jump gate,
-                        // which requires !is_falling, refuses.
-                        p.is_falling = false;
-                        p.jump_time = 0;
-                        p.y += 1;
-                    }
+    // --- Holding on to a wall (game1.c:8464-8495) ---
+    // A cling is not permanent: every tick re-reads the tile actually being
+    // held. A wall that is *slippery* as well as clingable lets the player
+    // slide down it one row per tick, and running out of clingable wall -
+    // by slipping off the bottom of it, or because the tile simply stopped
+    // being clingable - drops them. Without this the player stuck to the
+    // wall forever, which is what "just bugging against a wall" looked like.
+    if let Some(dir) = p.cling_dir {
+        let (cx, cy) = match dir {
+            FaceDir::West => (p.x - 1, p.y - 2),
+            FaceDir::East => (p.x + 3, p.y - 2),
+        };
+        let target = attr_at(&level, &data, cx, cy);
+        let slippery = target & crate::data::TILE_ATTR_SLIPPERY != 0;
+        let clingable = target & TILE_ATTR_CAN_CLING != 0;
+        if slippery && clingable {
+            if test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                != MoveResult::Free
+            {
+                p.cling_dir = None; // reached the floor
+            } else {
+                p.y += 1;
+                p.cling_slip = true;
+                let (cx, cy) = match dir {
+                    FaceDir::West => (p.x - 1, p.y - 2),
+                    FaceDir::East => (p.x + 3, p.y - 2),
+                };
+                let target = attr_at(&level, &data, cx, cy);
+                if target & crate::data::TILE_ATTR_SLIPPERY == 0
+                    && target & TILE_ATTR_CAN_CLING == 0
+                {
+                    p.cling_dir = None;
+                    p.cling_slip = false;
                 }
             }
+        } else if !clingable {
+            p.cling_dir = None;
+        }
+    }
+
+    // --- Horizontal movement (game1.c:8606-8687) ---
+    // Transcribed move-first-then-test, as the original does it, rather
+    // than the test-first rewrite this used to be. The difference is not
+    // cosmetic: testing before the step checks the column the player is
+    // *standing in* instead of the one they are moving into, so walls only
+    // stopped them a tile late and `canPlayerCling` was read off the
+    // player's own column rather than the wall's.
+    //
+    // The one thing not reproduced is the original's uninitialized
+    // `horizmove` when the step is refused at the map edge (flagged "WHOA
+    // uninitialized" at game1.c:8637); that reads stack garbage, so this
+    // treats it as MOVE_FREE.
+    //
+    // `southmove` is probed *before* stepping (game1.c:8607, 8648) - it is
+    // what distinguishes walking down a slope from walking off a ledge.
+    if input.west && p.cling_dir.is_none() && !input.east {
+        let southmove =
+            test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling);
+        if p.face_dir == FaceDir::West {
+            p.x -= 1;
         } else {
             p.face_dir = FaceDir::West;
         }
+        let mut horizmove = MoveResult::Free;
+        if p.x < 1 {
+            p.x += 1;
+        } else {
+            horizmove = test_move(Direction::West, p.x, p.y, &level, &data, &mut p.can_cling);
+            if horizmove == MoveResult::Blocked {
+                p.x += 1;
+                if test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                    == MoveResult::Free
+                    && p.can_cling
+                {
+                    sfx.write(PlaySfx(snd::PLAYER_CLING));
+                    p.cling_dir = Some(FaceDir::West);
+                    p.is_recoiling = false;
+                    p.recoil_left = 0;
+                    p.is_falling = false;
+                    p.jump_time = 0;
+                    p.fall_time = 0;
+                    p.cmd_jump_latch = input.jump;
+                }
+            }
+        }
+        if horizmove == MoveResult::Sloped {
+            p.y -= 1; // walking *up* a slope
+        } else if southmove == MoveResult::Sloped
+            && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                == MoveResult::Free
+        {
+            // Walking *down* one (game1.c:8638-8645). Clearing the falling
+            // flag here is what keeps jumping possible on a descent.
+            p.is_falling = false;
+            p.jump_time = 0;
+            p.y += 1;
+        }
     }
     if input.east && p.cling_dir.is_none() && !input.west {
+        let southmove =
+            test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling);
         if p.face_dir == FaceDir::East {
-            let m = test_move(Direction::East, p.x, p.y, &level, &data, &mut p.can_cling);
-            if m == MoveResult::Blocked {
+            p.x += 1;
+        } else {
+            p.face_dir = FaceDir::East;
+        }
+        let mut horizmove = MoveResult::Free;
+        if level.width as i32 - 4 < p.x {
+            p.x -= 1;
+        } else {
+            horizmove = test_move(Direction::East, p.x, p.y, &level, &data, &mut p.can_cling);
+            if horizmove == MoveResult::Blocked {
+                p.x -= 1;
                 if test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
                     == MoveResult::Free
                     && p.can_cling
                 {
                     sfx.write(PlaySfx(snd::PLAYER_CLING));
                     p.cling_dir = Some(FaceDir::East);
+                    p.is_recoiling = false;
+                    p.recoil_left = 0;
                     p.is_falling = false;
                     p.jump_time = 0;
                     p.fall_time = 0;
                     p.cmd_jump_latch = input.jump;
                 }
-            } else {
-                p.x += 1;
-                if m == MoveResult::Sloped {
-                    p.y -= 1;
-                } else if southmove_pre == MoveResult::Sloped
-                    && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
-                        == MoveResult::Free
-                {
-                    // Descending (game1.c:8679-8686); see the west branch.
-                    p.is_falling = false;
-                    p.fall_time = 0;
-                    p.y += 1;
-                }
             }
-        } else {
-            p.face_dir = FaceDir::East;
+        }
+        if horizmove == MoveResult::Sloped {
+            p.y -= 1;
+        } else if southmove == MoveResult::Sloped
+            && test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                == MoveResult::Free
+        {
+            p.is_falling = false;
+            p.fall_time = 0;
+            p.y += 1;
         }
     }
 
@@ -435,7 +580,6 @@ pub fn move_player_tick(
             p.is_falling = true;
             p.fall_time = 0;
         }
-        p.on_ground = false;
         // Recoil owns vertical motion while it lasts (game1.c:8784).
         if p.is_falling && !p.is_recoiling {
             p.y += 1;
@@ -446,14 +590,17 @@ pub fn move_player_tick(
                     sfx.write(PlaySfx(snd::PLAYER_LAND));
                 }
                 p.is_falling = false;
-                p.on_ground = true;
                 p.y -= 1;
                 p.jump_time = 0;
                 p.cmd_jump_latch = input.jump;
                 p.fall_time = 0;
             }
             if p.is_falling && p.fall_time > 3 {
+                // A long fall covers two rows a tick and drags the view
+                // down with it (game1.c:8802-8807), rather than waiting for
+                // the follow tail's dead zone to notice.
                 p.y += 1;
+                scroll.y += 1;
                 if test_move(Direction::South, p.x, p.y, &level, &data, &mut dummy_cling)
                     != MoveResult::Free
                 {
@@ -461,8 +608,8 @@ pub fn move_player_tick(
                         sfx.write(PlaySfx(snd::PLAYER_LAND));
                     }
                     p.is_falling = false;
-                    p.on_ground = true;
                     p.y -= 1;
+                    scroll.y -= 1;
                     p.jump_time = 0;
                     p.cmd_jump_latch = input.jump;
                     p.fall_time = 0;
@@ -474,41 +621,40 @@ pub fn move_player_tick(
         }
     }
 
-    // Safety net: nothing in TestPlayerMove bounds a fall below the map
-    // buffer or a bottomless hazard (e.g. deep water with no BLOCK_SOUTH
-    // tiles), so without this the player can fall forever. Respawn at the
-    // level's start once clearly past the bottom of the playable content.
-    if p.y as i64 > level_data.content_max.1 as i64 + 20 {
-        let (sx, sy) = crate::level::find_player_start(&level);
-        p.x = sx as i32;
-        p.y = sy as i32;
-        p.is_falling = true;
-        p.jump_time = 0;
-        p.fall_time = 0;
-        p.cling_dir = None;
+    // Falling out of the world kills rather than teleports
+    // (game1.c:9165-9167): past `maxScrollY + SCROLLH + 3`, which is three
+    // rows below the last row the view can ever reach. This used to
+    // silently respawn the player at the level start, which skipped the
+    // death entirely - no animation, no cost, and the level left as it was.
+    let bottom = crate::camera::max_scroll_y(level.width) + crate::camera::SCROLL_H + 3;
+    if p.y > bottom {
+        p.dead_timer = 1;
     }
 }
 
-/// Plays the death animation (frozen movement, alternating DEAD frames,
-/// floating upward) then respawns at the level start - a simplified stand-in
-/// for the original's checkpoint-reload (`LoadGameState('T')`); we don't
-/// have a save-state system, so "checkpoint" is just "level start" here.
-/// Timing mirrors game1.c:9230-9256: ~10 ticks stationary, then floats up
-/// until tick 36 triggers the reload.
+/// Plays the death animation - frozen movement, alternating DEAD frames,
+/// the body floating upward - then restarts the level (game1.c:9225-9258).
+///
+/// The restart is a full `InitializeLevel`, not a teleport: it rebuilds the
+/// level from the map, so every enemy the player had already killed is back
+/// and the level-entry snapshot's score/stars/bombs/health come back with
+/// it. That is raised as an event so it shares one code path with the F1
+/// menu's "Restart Level", exactly as the two share `LoadGameState('T');
+/// InitializeLevel(levelNum);` in the original.
 pub fn update_death(
     mut query: Query<&mut Player>,
-    level_data: Res<CurrentLevel>,
-    data: Res<GameData>,
     mut sfx: EventWriter<PlaySfx>,
-    checkpoint: Res<crate::flow::Checkpoint>,
-    mut score: ResMut<crate::flow::Score>,
-    mut stars: ResMut<crate::flow::Stars>,
+    mut scroll: ResMut<crate::camera::Scroll>,
+    mut restart: EventWriter<crate::flow::RestartLevel>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
     };
     if p.dead_timer == 0 {
         return;
+    }
+    if p.dead_timer == 1 {
+        sfx.write(PlaySfx(snd::PLAYER_HURT));
     }
     p.dead_timer += 1;
     // The death jingle lands partway in, once the body starts rising
@@ -518,24 +664,15 @@ pub fn update_death(
     }
     if p.dead_timer > 10 {
         p.y -= 1;
+        // The view drifts up with the body, but only for the first couple
+        // of ticks (game1.c:9239-9240).
+        if scroll.y > 0 && p.dead_timer < 12 {
+            scroll.y -= 1;
+        }
     }
     if p.dead_timer > 36 {
-        let Some(level) = data.load_level(&level_data.name) else {
-            return;
-        };
-        let (sx, sy) = crate::level::find_player_start(&level);
-        p.x = sx as i32;
-        p.y = sy as i32;
-        p.is_falling = true;
-        p.jump_time = 0;
-        p.fall_time = 0;
-        p.cling_dir = None;
-        p.hurt_cooldown = 0;
         p.dead_timer = 0;
-        // Dying rewinds to the level-entry snapshot rather than just
-        // moving the player - so points banked during the failed attempt
-        // are lost with it.
-        checkpoint.restore(&mut score, &mut stars, &mut p);
+        restart.write(crate::flow::RestartLevel);
     }
 }
 
@@ -557,25 +694,49 @@ pub fn sync_transform(mut query: Query<(&Player, &mut Transform)>) {
 // Named frame offsets within one facing direction's 23-frame block
 // (player.h: PLAYER_BASE_WEST=0, PLAYER_BASE_EAST=23, frames 0..22 per side).
 mod frame {
-    pub const WALK: [usize; 4] = [0, 1, 2, 3];
+    pub const WALK_1: usize = 0;
+    pub const WALK_4: usize = 3;
     pub const STAND: usize = 4;
     pub const LOOK_NORTH: usize = 5;
     pub const LOOK_SOUTH: usize = 6;
     pub const JUMP: usize = 7;
     pub const FALL: usize = 8;
     pub const CLING: usize = 9;
+    pub const CLING_OPPOSITE: usize = 10;
+    pub const CLING_NORTH: usize = 11;
+    pub const CLING_SOUTH: usize = 12;
     pub const FALL_LONG: usize = 13;
     pub const PAIN: usize = 15;
+    pub const FALL_SEVERE: usize = 16;
+    pub const STAND_BLINK: usize = 18;
+    pub const SHAKE_1: usize = 19;
+    pub const SHAKE_2: usize = 20;
+    pub const SHAKE_3: usize = 21;
+    pub const JUMP_LONG: usize = 22;
     /// Shared by both facings, not offset by `base` - PLAYER_DEAD_1/2 = 46/47.
     pub const DEAD_1: usize = 46;
 }
 
-const WALK_FRAME_SECONDS: f32 = 0.1;
-
-pub fn animate_player(
+/// The tail of `MovePlayer` (game1.c:8824-8949): choose this tick's sprite
+/// frame, then move the view.
+///
+/// These are one system because they are one function in the original, and
+/// not incidentally so: the look-up/look-down branch ends in a `return`
+/// (game1.c:8853) that deliberately skips the scroll-follow below it. Split
+/// them and the follow immediately drags the view back, which is why
+/// looking around never appeared to do anything.
+///
+/// NOT PORTED: the `playerBombDir` crouch pose, which belongs to the bomb
+/// path in `MovePlayer` rather than to `combat::place_bomb` where bombs
+/// live here.
+pub fn update_frame_and_scroll(
     mut query: Query<&mut Player>,
     input: Res<PlayerInput>,
-    time: Res<Time>,
+    level_data: Res<CurrentLevel>,
+    data: Res<GameData>,
+    mut scroll: ResMut<crate::camera::Scroll>,
+    near_globe: Res<crate::hints::NearHintGlobe>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -586,42 +747,137 @@ pub fn animate_player(
         p.frame = frame::DEAD_1 + (p.dead_timer as usize % 2);
         return;
     }
-    let base = match p.face_dir {
-        FaceDir::West => 0,
-        FaceDir::East => 23,
-    };
-    if p.hurt_cooldown > 40 {
-        // The "ouch" pose: shown only for the first 4 of the 44
-        // invincibility-cooldown ticks (game1.c:9214-9218) - the original
-        // also flashes it solid white for exactly the very first tick,
-        // which we don't replicate (no white draw-mode), just the pose.
-        p.frame = base + frame::PAIN;
+    let Some(level) = data.load_level(&level_data.name) else {
         return;
+    };
+    let cling_slip = p.cling_slip;
+    let clinging = p.cling_dir.is_some();
+
+    // --- Looking around (game1.c:8827-8852) ---
+    // Holding up or down while standing still walks the view through the
+    // world a row per tick. That is the whole mechanic: there is no
+    // separate "camera offset", just the ordinary scroll position being
+    // nudged, which is why it needed the scroll to become stateful first.
+    // The reward for doing it is that anything parked off-screen above
+    // comes into view and starts running - actors only tick while visible
+    // (`ProcessActor`, game1.c:7858-7864) - so hoards of prizes overhead
+    // wake up and drop once you look up at them. Hint 5 in episode 1 is
+    // literally "In high places look up to find bonus objects."
+    if (input.look_up || input.look_down)
+        && !input.west
+        && !input.east
+        && !p.is_falling
+        && !input.jump
+    {
+        p.idle_count = 0;
+        // Looking up *at a hint globe* reads the globe instead of panning;
+        // `hints::read_hint_globe` handles that half.
+        if input.look_up && near_globe.0.is_none() {
+            if scroll.y > 0 && p.y - scroll.y < crate::camera::SCROLL_H - 1 {
+                scroll.y -= 1;
+            }
+            if cling_slip {
+                scroll.y += 1;
+            }
+            p.frame = if clinging {
+                frame::CLING_NORTH
+            } else {
+                frame::LOOK_NORTH
+            };
+        } else if input.look_down {
+            if scroll.y + 3 < p.y {
+                scroll.y += 1;
+                if cling_slip && scroll.y + 3 < p.y {
+                    scroll.y += 1;
+                }
+            }
+            p.frame = if clinging {
+                frame::CLING_SOUTH
+            } else {
+                frame::LOOK_SOUTH
+            };
+        }
+        scroll.clamp_to(level.width);
+        return; // deliberately skips the scroll-follow below
     }
-    let moving = (input.west || input.east) && p.on_ground && p.cling_dir.is_none();
-    let local = if p.cling_dir.is_some() {
-        frame::CLING
-    } else if p.is_falling {
-        if p.fall_time > 3 {
+
+    if let Some(dir) = p.cling_dir {
+        p.idle_count = 0;
+        // Pressing away from the wall shows Cosmo reaching off it.
+        let pressing_away = match dir {
+            FaceDir::West => input.east,
+            FaceDir::East => input.west,
+        };
+        p.frame = if pressing_away {
+            frame::CLING_OPPOSITE
+        } else {
+            frame::CLING
+        };
+    } else if (p.is_falling && !p.is_recoiling) || (p.jump_time > 6 && !p.is_falling) {
+        p.idle_count = 0;
+        p.frame = if !p.is_recoiling && !p.is_falling && p.jump_time > 6 {
+            frame::FALL
+        } else if p.fall_time >= 10 && p.fall_time < 25 {
             frame::FALL_LONG
+        } else if p.fall_time == 25 {
+            // The original also sets the dizzy state here, which isn't ported.
+            frame::FALL_SEVERE
+        } else if !p.is_falling {
+            frame::JUMP
         } else {
             frame::FALL
+        };
+    } else if (input.jump && !p.cmd_jump_latch) || p.is_recoiling {
+        p.idle_count = 0;
+        p.frame = frame::JUMP;
+        if p.is_recoiling && p.recoil_left > 13 {
+            // `isPlayerLongJumping`, which this approximates by the recoil
+            // counter still being in its fast-rise range.
+            p.frame = frame::JUMP_LONG;
         }
-    } else if p.jump_time > 0 {
-        frame::JUMP
-    } else if moving {
-        p.anim_timer += time.delta_secs();
-        let step = (p.anim_timer / WALK_FRAME_SECONDS) as usize % frame::WALK.len();
-        frame::WALK[step]
-    } else if !input.west && !input.east && input.look_up {
-        frame::LOOK_NORTH
-    } else if !input.west && !input.east && input.look_down {
-        frame::LOOK_SOUTH
-    } else {
-        p.anim_timer = 0.0;
-        frame::STAND
-    };
-    p.frame = base + local;
+        if p.is_recoiling && p.recoil_left < 3 {
+            p.frame = frame::FALL;
+        }
+    } else if input.west == input.east {
+        // Standing around. Cosmo blinks at random, and if left alone long
+        // enough looks up, then down, then shakes his head at you.
+        let rnd = p.next_rand(50);
+        p.frame = frame::STAND;
+        if !input.west && !input.east && !p.is_falling {
+            p.idle_count += 1;
+            match p.idle_count {
+                101..=109 => p.frame = frame::LOOK_NORTH,
+                140..=149 => p.frame = frame::LOOK_SOUTH,
+                180 => p.frame = frame::SHAKE_1,
+                181 => p.frame = frame::SHAKE_2,
+                182 => p.frame = frame::SHAKE_3,
+                183 => p.frame = frame::SHAKE_2,
+                184 => p.frame = frame::SHAKE_1,
+                185 => p.idle_count = 0,
+                _ => {}
+            }
+        }
+        if p.frame != frame::LOOK_NORTH
+            && p.frame != frame::LOOK_SOUTH
+            && (rnd == 0 || rnd == 31)
+        {
+            p.frame = frame::STAND_BLINK;
+        }
+    } else if !p.is_falling {
+        // Walking: one frame every other tick, footstep on the odd ones.
+        p.idle_count = 0;
+        if p.move_count % 2 != 0 {
+            if p.frame % 2 != 0 {
+                sfx.write(PlaySfx(snd::PLAYER_FOOTSTEP));
+            }
+            p.frame += 1;
+        }
+        if p.frame > frame::WALK_4 {
+            p.frame = frame::WALK_1;
+        }
+    }
+
+    scroll.follow(&p, &level, cling_slip);
 }
 
 #[derive(Resource, Default)]
@@ -643,8 +899,58 @@ impl PlayerFrames {
 
 pub fn apply_player_frame(mut query: Query<(&Player, &mut Sprite)>, frames: Res<PlayerFrames>) {
     for (p, mut sprite) in &mut query {
-        if let Some(h) = frames.0.get(p.frame) {
+        // The death and "ouch" poses are draw-time overrides in the
+        // original rather than branches of the frame chain
+        // (`ProcessAndDrawPlayer`, game1.c:9213-9224), so they are applied
+        // here: the chain keeps running underneath, which is what lets the
+        // view keep scrolling while the player is flinching.
+        let index = if p.dead_timer != 0 {
+            p.frame // already absolute - PLAYER_DEAD_1/2 aren't per-facing
+        } else if p.hurt_cooldown > 40 {
+            // Shown for the first 4 of the 44 invincibility ticks. The
+            // original also flashes it solid white on the very first tick,
+            // which we don't replicate (no white draw mode), just the pose.
+            p.base_frame() + frame::PAIN
+        } else {
+            p.base_frame() + p.frame
+        };
+        if let Some(h) = frames.0.get(index) {
             sprite.image = h.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_script_holds_each_step_for_its_tick_count() {
+        let s = InputScript::parse("e3,.2,uk1");
+        assert!(s.at(0).east && !s.at(0).look_up);
+        assert!(s.at(2).east);
+        assert!(!s.at(3).east, "the second step has no keys held");
+        assert!(!s.at(4).east);
+        assert!(s.at(5).look_up && s.at(5).dismiss, "steps can combine keys");
+    }
+
+    #[test]
+    fn the_last_step_holds_once_the_script_runs_out() {
+        let s = InputScript::parse("e2,w4");
+        assert!(s.at(99).west);
+    }
+
+    #[test]
+    fn an_empty_script_holds_nothing_down() {
+        let s = InputScript::parse("");
+        let at = s.at(0);
+        assert!(!at.east && !at.west && !at.jump);
+    }
+
+    #[test]
+    fn a_step_without_a_count_lasts_one_tick() {
+        let s = InputScript::parse("j,e5");
+        assert!(s.at(0).jump);
+        assert!(s.at(1).east && !s.at(1).jump);
     }
 }

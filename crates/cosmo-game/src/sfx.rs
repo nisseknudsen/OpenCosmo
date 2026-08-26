@@ -34,8 +34,10 @@ pub mod snd {
     pub const BARREL_DESTROY_1: u16 = 12;
     pub const PRIZE: u16 = 13;
     pub const PLAYER_HURT: u16 = 14;
+    pub const PLAYER_FOOTSTEP: u16 = 19;
     pub const NO_BOMBS: u16 = 28;
     pub const PLACE_BOMB: u16 = 29;
+    pub const HINT_DIALOG_ALERT: u16 = 30;
     pub const BARREL_DESTROY_2: u16 = 61;
 }
 

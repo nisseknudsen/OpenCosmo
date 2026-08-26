@@ -132,6 +132,70 @@ pub fn collect_pickups(
     }
 }
 
+/// Raised to restart the current level from its entry snapshot - by dying,
+/// and by the F1 menu's "Restart Level". It is a shared path because the
+/// original treats them identically: both `playerDeadTime > 36`
+/// (game1.c:9256-9258) and `HELP_MENU_RESTART` (game1.c:9821-9822) run
+/// `LoadGameState('T'); InitializeLevel(levelNum);`.
+#[derive(Event)]
+pub struct RestartLevel;
+
+/// Reloads the level and rewinds to its entry snapshot.
+///
+/// `InitializeLevel` rebuilds the actor array from the map, so every
+/// creature the player killed on the failed attempt is back. Moving the
+/// player alone - which is what this used to do on death - left the level
+/// permanently stripped of whatever they had already cleared.
+#[allow(clippy::too_many_arguments)]
+pub fn restart_level(
+    mut commands: Commands,
+    mut events: EventReader<RestartLevel>,
+    asset_server: Res<AssetServer>,
+    data: Res<GameData>,
+    tileset: Option<Res<TilesetAssets>>,
+    mut current: ResMut<CurrentLevel>,
+    scoped: Query<Entity, With<LevelScoped>>,
+    mut player_q: Query<&mut Player>,
+    checkpoint: Res<Checkpoint>,
+    mut score: ResMut<Score>,
+    mut stars: ResMut<Stars>,
+    mut scroll: ResMut<crate::camera::Scroll>,
+    mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
+) {
+    if events.read().next().is_none() {
+        return;
+    }
+    let (Some(tileset), Ok(mut player)) = (tileset, player_q.single_mut()) else {
+        return;
+    };
+    for entity in &scoped {
+        commands.entity(entity).despawn();
+    }
+    let name = current.name.clone();
+    if let Some(reloaded) =
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &name)
+    {
+        *current = reloaded;
+    }
+    if let Some(level) = data.load_level(&name) {
+        let (sx, sy) = level::find_player_start(&level);
+        player.x = sx as i32;
+        player.y = sy as i32;
+    }
+    player.is_falling = true;
+    player.jump_time = 0;
+    player.fall_time = 0;
+    player.cling_dir = None;
+    player.dead_timer = 0;
+    player.hurt_cooldown = 0;
+    checkpoint.restore(&mut score, &mut stars, &mut player);
+    scroll.centre_on(&player, &current);
+    // `InitializeMapGlobals` clears this on every level init, restart
+    // included (game1.c:10459), so the level's first globe greets the
+    // player again on the retry.
+    saw_auto.0 = false;
+}
+
 #[derive(Resource)]
 pub struct LevelSequence {
     pub order: Vec<String>,
@@ -189,45 +253,66 @@ pub fn load_level_into_world(
     })
 }
 
+/// Raised to move to a *different* level - by reaching an exit, and by the
+/// developer level warp. Distinct from `RestartLevel` in that it takes a
+/// fresh checkpoint on arrival instead of rewinding to the old one.
+#[derive(Event)]
+pub struct EnterLevel(pub String);
+
 pub fn check_level_exit(
+    exit_q: Query<&ExitTrigger>,
+    player_q: Query<&Player>,
+    mut sequence: ResMut<LevelSequence>,
+    mut enter: EventWriter<EnterLevel>,
+) {
+    let Ok(player) = player_q.single() else {
+        return;
+    };
+    if player.dead_timer != 0 {
+        return; // drifting into an exit while dead shouldn't count
+    }
+    let touching = exit_q
+        .iter()
+        .any(|e| (e.x - player.x).abs() <= 2 && (e.y - player.y).abs() <= 3);
+    if touching {
+        enter.write(EnterLevel(sequence.advance()));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn enter_level(
     mut commands: Commands,
+    mut events: EventReader<EnterLevel>,
     mut checkpoint: ResMut<Checkpoint>,
     score: Res<Score>,
     stars: Res<Stars>,
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
     tileset: Res<TilesetAssets>,
-    mut sequence: ResMut<LevelSequence>,
     mut current: ResMut<CurrentLevel>,
-    exit_q: Query<&ExitTrigger>,
     scoped_q: Query<Entity, With<LevelScoped>>,
     mut player_q: Query<&mut Player>,
+    mut scroll: ResMut<crate::camera::Scroll>,
+    mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
 ) {
+    let Some(EnterLevel(next_name)) = events.read().last() else {
+        return;
+    };
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
-    if player.dead_timer != 0 {
-        return; // likewise, drifting into an exit while dead shouldn't count
-    }
-    let touching = exit_q
-        .iter()
-        .any(|e| (e.x - player.x).abs() <= 2 && (e.y - player.y).abs() <= 3);
-    if !touching {
-        return;
-    }
 
     for e in &scoped_q {
         commands.entity(e).despawn();
     }
 
-    let next_name = sequence.advance();
     let Some(new_current) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &next_name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, next_name)
     else {
         return;
     };
 
-    let level_json = data.load_level(&next_name).unwrap();
+    let level_json = data.load_level(next_name).unwrap();
     let (sx, sy) = level::find_player_start(&level_json);
     player.x = sx as i32;
     player.y = sy as i32;
@@ -236,8 +321,13 @@ pub fn check_level_exit(
     player.jump_time = 0;
     player.fall_time = 0;
     player.cling_dir = None;
+    player.dead_timer = 0;
 
     *current = new_current;
+    scroll.centre_on(&player, &current);
+    // `sawAutoHintGlobe` is per level (game1.c:10459), so the new level's
+    // first globe greets the player unprompted like the last one's did.
+    saw_auto.0 = false;
 }
 
 #[cfg(test)]

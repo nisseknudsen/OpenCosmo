@@ -10,7 +10,6 @@
 //! `ActBombArmed` (game1.c:2286-2316): a placed bomb sits for a short fuse
 //! and then produces an explosion, which is what actually does the damage.
 
-use crate::actors::Collectible;
 use crate::effects::{self, EffectAssets, Explosion, SPR_BOMB_ARMED};
 use crate::actors::Container;
 use crate::enemy_ai::{Enemy, EnemyKind, CONTAINER_POUNCE_RECOIL};

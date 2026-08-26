@@ -3,18 +3,22 @@ mod audio;
 mod camera;
 mod combat;
 mod data;
+mod devmenu;
 mod effects;
 mod enemy;
 mod enemy_ai;
 mod flow;
 mod help;
+mod hints;
 mod hud;
 mod level;
+mod panel;
 mod pickups;
 mod player;
 mod screen;
 mod sfx;
 mod tileset;
+mod trace;
 
 use bevy::prelude::*;
 use bevy::time::Fixed;
@@ -57,7 +61,14 @@ fn main() {
         .init_resource::<flow::Stars>()
         .init_resource::<flow::Checkpoint>()
         .init_resource::<help::Paused>()
-        .add_event::<help::RestartLevel>()
+        .init_resource::<camera::Scroll>()
+        .init_resource::<hints::NearHintGlobe>()
+        .init_resource::<hints::SawAutoHintGlobe>()
+        .init_resource::<hints::HintLatch>()
+        .init_resource::<devmenu::WarpCursor>()
+        .add_event::<flow::RestartLevel>()
+        .add_event::<flow::EnterLevel>()
+        .add_event::<devmenu::OpenLevelWarp>()
         .init_resource::<sfx::SfxState>()
         .add_event::<sfx::PlaySfx>()
         // --- Title / menu / credits ---
@@ -79,36 +90,64 @@ fn main() {
         .add_systems(OnEnter(GameState::Playing), setup_game)
         .add_systems(
             OnExit(GameState::Playing),
-            (teardown_game, sfx::stop_all_sfx, help::close_help),
+            (
+                teardown_game,
+                sfx::stop_all_sfx,
+                help::close_help,
+                hints::clear_hints,
+                devmenu::close_level_warp,
+            ),
         )
         .add_systems(
             FixedUpdate,
             (
-                player::read_input,
-                player::move_player_tick,
-                enemy::move_walkers,
-                // Runs before hazard_damage so contact tests see this
-                // tick's positions rather than the previous one's.
-                enemy_ai::tick_enemies,
-                // Pounce resolves before contact damage so landing on an
-                // enemy kills it instead of hurting the player.
-                combat::pounce_enemies,
-                combat::pounce_containers,
-                enemy::hazard_damage,
-                combat::place_bomb,
-                combat::tick_bombs,
-                effects::tick_explosions,
-                combat::explosion_damage,
-                effects::tick_decorations,
-                effects::tick_score_effects,
-                player::update_death,
-                flow::collect_pickups,
-                flow::check_level_exit,
-                player::animate_player,
-                sfx::play_queued_sfx,
+                (
+                    player::move_player_tick,
+                    enemy::move_walkers,
+                    // Runs before hazard_damage so contact tests see this
+                    // tick's positions rather than the previous one's.
+                    enemy_ai::tick_enemies,
+                    // Pounce resolves before contact damage so landing on an
+                    // enemy kills it instead of hurting the player.
+                    combat::pounce_enemies,
+                    combat::pounce_containers,
+                    enemy::hazard_damage,
+                    combat::place_bomb,
+                    combat::tick_bombs,
+                ),
+                (
+                    effects::tick_explosions,
+                    combat::explosion_damage,
+                    effects::tick_decorations,
+                    effects::tick_score_effects,
+                    player::update_death,
+                    flow::collect_pickups,
+                    flow::check_level_exit,
+                    // Globe proximity is settled before the frame/scroll
+                    // pass, which needs it to know whether looking up pans
+                    // the view or reads the globe.
+                    hints::detect_hint_globe,
+                    player::update_frame_and_scroll,
+                    hints::read_hint_globe,
+                    sfx::play_queued_sfx,
+                ),
             )
                 .chain()
+                .after(player::read_input)
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
+        )
+        // Input and tracing keep running while a text frame is up: a
+        // scripted run needs to be able to dismiss one, and a trace that
+        // went silent on pause would look like a hang.
+        .add_systems(
+            FixedUpdate,
+            (
+                player::read_input,
+                trace::trace_tick.run_if(trace::trace_enabled),
+                trace::screenshot_at,
+                trace::quit_after,
+            )
+                .run_if(in_state(GameState::Playing)),
         )
         .add_systems(
             Update,
@@ -117,7 +156,7 @@ fn main() {
                 player::sync_transform,
                 actors::animate_sprites,
                 actors::track_player,
-                camera::follow_player,
+                camera::apply_scroll,
                 level::scroll_backdrop,
                 hud::update_status_bar,
                 hud::fit_camera_to_play_area,
@@ -126,10 +165,25 @@ fn main() {
                 .chain()
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
         )
-        // The menu itself must keep running while everything else is paused.
+        // Modal frames must keep running while everything else is paused.
+        //
+        // The level (re)loads live here too, after the systems that ask for
+        // them. They cannot sit in `FixedUpdate`: an event written from
+        // `Update` (the warp menu) would have to survive until the next
+        // fixed tick, and at 18.2Hz against a 60Hz frame rate the event
+        // buffers are swapped out from under it first. The other direction
+        // is safe - `FixedUpdate` runs earlier in the same frame - so
+        // `update_death`'s restart request still arrives.
         .add_systems(
             Update,
-            (help::help_menu_input, help::handle_restart)
+            (
+                help::help_menu_input,
+                devmenu::open_level_warp,
+                devmenu::level_warp_input,
+                hints::close_hint,
+                flow::restart_level,
+                flow::enter_level,
+            )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
         );
@@ -180,6 +234,8 @@ fn setup_game(
     data: Res<GameData>,
     hud_assets: Res<hud::HudAssets>,
     ui_camera: Res<UiCamera>,
+    mut scroll: ResMut<camera::Scroll>,
+    mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
 ) {
     // Each episode names its levels differently, so the default start
     // comes from that episode's own progression rather than a literal.
@@ -220,6 +276,11 @@ fn setup_game(
     }
     let (player_health, player_cells, player_bombs) =
         (player.health, player.health_cells, player.bombs);
+    // `SPA_PLAYER_START` frames the view around the player as the map is
+    // read (game1.c:10195-10209); from here on the scroll is carried
+    // forward tick to tick rather than recomputed.
+    scroll.centre_on(&player, &current_level);
+    saw_auto.0 = false;
     commands.spawn((
         player,
         Sprite {

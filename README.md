@@ -12,8 +12,23 @@ from source.
   music. Select with `COSMO_EPISODE=1|2|3`.
 - Player movement is a faithful port of the original's `MovePlayer()` /
   `TestPlayerMove()`: tile-stepped walking, the real jump curve, gravity
-  ramp-up, wall-cling, and collision — running on an 18.2Hz fixed tick
-  matching the DOS timer rate the original used.
+  ramp-up, slopes, and collision — running on an 18.2Hz fixed tick
+  matching the DOS timer rate the original used. Walls that can be clung
+  to are grabbed automatically by walking into them mid-air and climbed by
+  jumping; ones that are *also* slippery let Cosmo slide down a row a tick
+  until he runs out of wall.
+- The view is the original's stateful `scrollX`/`scrollY` pair rather than
+  a camera centred on the player: it only gives chase once the player
+  leaves a dead zone, and holding up or down while standing still walks it
+  through the world a row at a time. That last part is a mechanic, not a
+  flourish — actors only run while on screen, so looking up at a stack of
+  prizes overhead is what wakes them and drops them on you.
+- Hint globes work: standing at one and pressing up opens its message, and
+  the first globe of each level speaks up unprompted. All 26 episode-1
+  messages plus episodes 2 and 3's are transcribed from the source.
+- Dying replays the level from scratch — enemies included — rather than
+  just moving the player back, matching the original's
+  `LoadGameState('T'); InitializeLevel(levelNum)`.
 - Actors (enemies, items, decorations) render at their authored positions
   using the correct sprite for each type — `ACT_*` (map actor type) and
   `SPR_*` (the sprite actually drawn) are different numbering spaces that
@@ -50,10 +65,16 @@ from source.
   Alt, and detonate into a real 6x6-tile blast that damages enemies and
   the player alike — and reaches things a pounce can't, like the roamer
   slug.
-- Not yet implemented: lives/game-over, sound effects (PC-speaker `SND_*`,
-  separate from the AdLib music), switches/doors/moving platforms, and
-  Episodes 2–3
-  (same pipeline, just needs `COSMO2`/`COSMO3` wired up like `COSMO1`).
+- F1 opens the help menu (restart, level warp, quit). The original also
+  offers Save/Restore/Help/Game-redefine/High-scores, which depend on
+  unported subsystems, so only working entries are listed. "L)evel Warp"
+  is a development aid with no counterpart in the shipped game: it jumps
+  to any slot in the episode's progression.
+- Not yet implemented: switches and doors, turret projectiles, moving
+  platforms (needs live map-tile mutation), the scooter and transporter,
+  the dizzy/ice-slide player states, and the actor types only episodes 2–3
+  enable. There is no lives or game-over system because the original has
+  none — dying costs you the level's progress, not a life.
 
 ## Building & running
 
@@ -79,18 +100,37 @@ is added as a modern alternative for jump.
 
 **Menu**: any key at the title screen, then B to begin, C for credits,
 T back to the title, Q to quit. In game, F1 opens the help menu (R to
-restart the level, Q back to the main menu, ESC to resume); the game is
-paused while it's open.
+restart the level, L for the level warp, Q back to the main menu, ESC to
+resume); the game is paused while it's open. In the level warp, the arrow
+keys move the cursor (left/right jump a column), Enter goes, ESC backs
+out. Any key dismisses a hint globe's message.
 
 **Debug env vars**, all used for headless verification during development
 rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
 (e.g. `bonus1`); `COSMO_STATE=menu|credits|playing` jumps straight to a
 screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
-`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` opens the
-help menu on the first frame; `COSMO_EPISODE=1|2|3`
-picks the episode; `COSMO_AUTOPLAY=1` drives
+`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` /
+`COSMO_WARP=1` open the help menu or level warp on the first frame;
+`COSMO_EPISODE=1|2|3` picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
 pounce/bomb/blast events.
+
+**Verifying a mechanic headlessly.** `COSMO_INPUT` scripts the controls as
+comma-separated `<keys><ticks>` steps — keys being `w`/`e` (west/east),
+`u`/`d` (look up/down), `j` (jump), `b` (bomb), `k` (dismiss a text
+frame), `.` (nothing). `COSMO_TRACE=<n>` prints player position, facing,
+frame, scroll, cling and live enemy count every nth tick;
+`COSMO_SHOT=<path>` grabs the window once (at `COSMO_SHOT_AT`, default
+tick 30) and `COSMO_QUIT_AFTER=<ticks>` ends the run. So, for example,
+checking that looking up and down actually pans the view:
+
+```sh
+COSMO_STATE=playing COSMO_LEVEL=a1 COSMO_TRACE=3 COSMO_QUIT_AFTER=120 \
+  COSMO_INPUT="e8,k3,e30,.3,u30,.3,d40" cargo run -p cosmo-game
+```
+
+The `rel_row` column in that trace is the player's row within the window,
+and it is what should move while `pos` stays put.
 
 ## Architecture
 

@@ -870,14 +870,18 @@ pub fn tick_enemies(
         transform.translation.x = world.x;
         transform.translation.y = world.y;
 
-        // `nextDrawMode = DRAW_MODE_FLIPPED` is a *vertical* flip.
+        // `nextDrawMode = DRAW_MODE_FLIPPED` is a *vertical* flip, and it
+        // is the only flip the original has. Actors are never mirrored
+        // horizontally: `DrawSprite` (game1.c:1210-1264) picks between
+        // `DrawSpriteTile` and `DrawSpriteTileFlipped`, and the latter
+        // walks rows bottom-to-top - there is no column-reversing variant.
+        // Facing is baked into the *artwork* instead, each walker having
+        // separate west and east frame runs that its tick function selects
+        // between (e.g. `ActRedChomper` game1.c:4327-4340: frames 0/1 walk
+        // west, 2/3 walk east). Mirroring on top of that therefore turns
+        // an already-correct sprite backwards, which is exactly what was
+        // reported.
         transform.scale.y = if flips_vertically(&e) { -1.0 } else { 1.0 };
-        // Walking actors face their direction of travel. Sprite art faces
-        // west by default, matching the player's PLAYER_BASE_WEST = 0.
-        transform.scale.x = match facing(&e) {
-            Some(DIR2_EAST) => -1.0,
-            _ => 1.0,
-        };
         *visibility = if draws_hidden(&e) {
             Visibility::Hidden
         } else {
@@ -913,15 +917,6 @@ fn flips_vertically(e: &Enemy) -> bool {
     }
 }
 
-/// The DIR2_* this actor currently faces, for behaviors that walk.
-fn facing(e: &Enemy) -> Option<i32> {
-    match e.kind {
-        EnemyKind::RedChomper | EnemyKind::PinkWorm | EnemyKind::SuctionWalker => Some(e.d1),
-        // ActCabbage stores its facing in data4 (game1.c:2358-2363).
-        EnemyKind::Cabbage => Some(if e.d4 != 0 { DIR2_EAST } else { DIR2_WEST }),
-        _ => None,
-    }
-}
 
 /// `ActPrize` (game1.c:4902-4928). Cycles `frame` up to `data5` and back
 /// to zero; `data4` halves the rate via the `data3` toggle.
