@@ -67,6 +67,11 @@ pub fn collect_pickups(
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
+    // The death animation floats the corpse upward through whatever is
+    // above it; it should not be hoovering up prizes on the way.
+    if player.dead_timer != 0 {
+        return;
+    }
     for (entity, c) in &pickup_q {
         let Some(pickup) = crate::pickups::pickup_for_sprite(c.spr) else {
             continue;
@@ -201,6 +206,9 @@ pub fn check_level_exit(
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
+    if player.dead_timer != 0 {
+        return; // likewise, drifting into an exit while dead shouldn't count
+    }
     let touching = exit_q
         .iter()
         .any(|e| (e.x - player.x).abs() <= 2 && (e.y - player.y).abs() <= 3);

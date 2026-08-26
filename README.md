@@ -78,13 +78,16 @@ a creature to pounce it. Ctrl/Alt match the original's own defaults; Space
 is added as a modern alternative for jump.
 
 **Menu**: any key at the title screen, then B to begin, C for credits,
-T back to the title, Q to quit.
+T back to the title, Q to quit. In game, F1 opens the help menu (R to
+restart the level, Q back to the main menu, ESC to resume); the game is
+paused while it's open.
 
 **Debug env vars**, all used for headless verification during development
 rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
 (e.g. `bonus1`); `COSMO_STATE=menu|credits|playing` jumps straight to a
 screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
-`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_EPISODE=1|2|3`
+`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` opens the
+help menu on the first frame; `COSMO_EPISODE=1|2|3`
 picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
 pounce/bomb/blast events.

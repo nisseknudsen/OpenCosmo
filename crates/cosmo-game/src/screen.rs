@@ -12,12 +12,12 @@ use bevy::prelude::*;
 use bevy::render::view::RenderLayers;
 
 /// The original's virtual screen, in 8px tiles: 320x200.
-const SCREEN_W_TILES: f32 = 40.0;
-const SCREEN_H_TILES: f32 = 25.0;
+pub(crate) const SCREEN_W_TILES: f32 = 40.0;
+pub(crate) const SCREEN_H_TILES: f32 = 25.0;
 
 /// Font tile for the solid panel background (FONT_BACKGROUND_GRAY =
 /// byte offset 0x0f28 / 40, graphics.h:71).
-const FONT_BACKGROUND_GRAY: usize = 97;
+pub(crate) const FONT_BACKGROUND_GRAY: usize = 97;
 
 #[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GameState {
@@ -47,7 +47,7 @@ pub fn font_tile_for_char(c: char) -> Option<usize> {
     }
 }
 
-fn tile_node(x: f32, y: f32, w: f32, h: f32) -> Node {
+pub(crate) fn tile_node(x: f32, y: f32, w: f32, h: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Percent(x / SCREEN_W_TILES * 100.0),
@@ -58,7 +58,7 @@ fn tile_node(x: f32, y: f32, w: f32, h: f32) -> Node {
     }
 }
 
-fn font_image(hud: &HudAssets, index: usize) -> ImageNode {
+pub(crate) fn font_image(hud: &HudAssets, index: usize) -> ImageNode {
     ImageNode::from_atlas_image(
         hud.font_image.clone(),
         TextureAtlas {
@@ -69,7 +69,13 @@ fn font_image(hud: &HudAssets, index: usize) -> ImageNode {
 }
 
 /// Draws `text` one font tile per character starting at tile (x, y).
-fn spawn_text(parent: &mut ChildSpawnerCommands, hud: &HudAssets, x: f32, y: f32, text: &str) {
+pub(crate) fn spawn_text(
+    parent: &mut ChildSpawnerCommands,
+    hud: &HudAssets,
+    x: f32,
+    y: f32,
+    text: &str,
+) {
     for (i, c) in text.chars().enumerate() {
         let Some(tile) = font_tile_for_char(c) else {
             continue;
@@ -118,7 +124,7 @@ fn screen_root(ui_camera: Entity) -> impl Bundle {
     )
 }
 
-fn screen_panel() -> Node {
+pub(crate) fn screen_panel() -> Node {
     Node {
         height: Val::Percent(100.0),
         max_width: Val::Percent(100.0),

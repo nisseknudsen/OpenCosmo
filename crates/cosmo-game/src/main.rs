@@ -7,6 +7,7 @@ mod effects;
 mod enemy;
 mod enemy_ai;
 mod flow;
+mod help;
 mod hud;
 mod level;
 mod pickups;
@@ -55,6 +56,8 @@ fn main() {
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
         .init_resource::<flow::Checkpoint>()
+        .init_resource::<help::Paused>()
+        .add_event::<help::RestartLevel>()
         .init_resource::<sfx::SfxState>()
         .add_event::<sfx::PlaySfx>()
         // --- Title / menu / credits ---
@@ -74,7 +77,10 @@ fn main() {
         )
         // --- Gameplay ---
         .add_systems(OnEnter(GameState::Playing), setup_game)
-        .add_systems(OnExit(GameState::Playing), (teardown_game, sfx::stop_all_sfx))
+        .add_systems(
+            OnExit(GameState::Playing),
+            (teardown_game, sfx::stop_all_sfx, help::close_help),
+        )
         .add_systems(
             FixedUpdate,
             (
@@ -102,7 +108,7 @@ fn main() {
                 sfx::play_queued_sfx,
             )
                 .chain()
-                .run_if(in_state(GameState::Playing)),
+                .run_if(in_state(GameState::Playing).and(help::not_paused)),
         )
         .add_systems(
             Update,
@@ -117,6 +123,13 @@ fn main() {
                 hud::fit_camera_to_play_area,
                 audio::update_music,
             )
+                .chain()
+                .run_if(in_state(GameState::Playing).and(help::not_paused)),
+        )
+        // The menu itself must keep running while everything else is paused.
+        .add_systems(
+            Update,
+            (help::help_menu_input, help::handle_restart)
                 .chain()
                 .run_if(in_state(GameState::Playing)),
         );
