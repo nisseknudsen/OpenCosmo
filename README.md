@@ -65,8 +65,17 @@ from source.
   and font. The original's menu also offers Restore/Story/Instructions/
   High Scores/Game Redefine/Ordering Info/BBS/Demo, which depend on
   subsystems this remake hasn't ported, so only working entries are shown.
-- Touching a level's exit actor advances to the next stage in the real
-  `A1 A2 bonus1 bonus2 A3 A4 …` progression.
+- Reaching a level's exit advances to the next stage in the real
+  `A1 A2 bonus1 bonus2 A3 A4 …` progression. Note that the *exit sign* is
+  the exit in most levels, and its tick function does nothing — the level
+  ends from the sprite-keyed interaction switch instead, on the sign coming
+  into view.
+- Actors honour the four flags their `ConstructActor` call carries —
+  force-active, stay-active, weighted, acrophile — extracted from the
+  source into a table. Between them these define a mechanic: a prize that
+  is `stay_active + weighted` sits dormant out of sight, wakes permanently
+  the first time it is seen, and then falls. That is why looking up at a
+  tall structure drops its bonuses down to you.
 - Per-actor enemy AI for 14 of the original's `ActXxx()` behaviours,
   covering ~47% of Episode 1's level actors.
 - Pouncing kills creatures and launches the recoil bounce, with per-type

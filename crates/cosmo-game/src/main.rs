@@ -167,9 +167,13 @@ fn main() {
                 (
                     effects::tick_explosions,
                     combat::explosion_damage,
+                    combat::explosion_bursts_containers,
                     effects::tick_decorations,
                     effects::tick_score_effects,
                     player::update_death,
+                    // Markers follow whatever moved this tick before
+                    // anything tests against them.
+                    actors::sync_actor_positions,
                     flow::collect_pickups,
                     flow::check_level_exit,
                     // Globe proximity is settled before the frame/scroll

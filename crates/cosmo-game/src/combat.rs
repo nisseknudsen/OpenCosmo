@@ -279,14 +279,9 @@ pub fn rects_overlap(
 /// here because the blast is a 6x6-tile sprite anchored two rows *below*
 /// the bomb - a symmetric radius around that origin would sit too low and
 /// too small, and miss things standing right next to the bomb.
-pub fn explosion_damage(
-    mut commands: Commands,
-    effects: Res<EffectAssets>,
-    mut score: ResMut<Score>,
-    explosions: Query<&Explosion>,
-    enemies: Query<(Entity, &Enemy)>,
-) {
-    let (blast_w, blast_h) = effects
+/// The blast's footprint in tiles, from the explosion sprite itself.
+fn blast_size(effects: &EffectAssets) -> (i32, i32) {
+    effects
         .get(effects::SPR_EXPLOSION)
         .map(|s| {
             (
@@ -294,7 +289,17 @@ pub fn explosion_damage(
                 (s.height_px / 8.0).ceil() as i32,
             )
         })
-        .unwrap_or((6, 6));
+        .unwrap_or((6, 6))
+}
+
+pub fn explosion_damage(
+    mut commands: Commands,
+    effects: Res<EffectAssets>,
+    mut score: ResMut<Score>,
+    explosions: Query<&Explosion>,
+    enemies: Query<(Entity, &Enemy)>,
+) {
+    let (blast_w, blast_h) = blast_size(&effects);
 
     for explosion in &explosions {
         for (entity, enemy) in &enemies {
@@ -321,6 +326,61 @@ pub fn explosion_damage(
                 effects::spawn_score_effect(&mut commands, &effects, POUNCE_SCORE, enemy.x, enemy.y);
                 score.0 += POUNCE_SCORE;
             }
+        }
+    }
+}
+
+/// Blasts break open barrels and baskets too.
+///
+/// `ActBarrel` (game1.c:2322-2330) does nothing each tick *except* check
+/// `IsNearExplosion` and destroy itself - so a barrel is as much a bomb
+/// target as a pounce target, and clearing a row of them with one bomb is
+/// intended. Barrels themselves have no blast of their own: `DestroyBarrel`
+/// (game1.c:7028-7051) emits four shards, plays one of two burst samples
+/// and spawns whatever the barrel contained. There is no chain reaction and
+/// no radius - the only self-detonating container is the worm crate
+/// (game1.c:4695-4721), which episode 1 never places.
+pub fn explosion_bursts_containers(
+    mut commands: Commands,
+    effects: Res<EffectAssets>,
+    mut score: ResMut<Score>,
+    explosions: Query<&Explosion>,
+    containers: Query<(Entity, &Container)>,
+    mut sfx: EventWriter<PlaySfx>,
+    mut burst_alternator: Local<bool>,
+) {
+    let (blast_w, blast_h) = blast_size(&effects);
+    for explosion in &explosions {
+        for (entity, container) in &containers {
+            if !rects_overlap(
+                explosion.x,
+                explosion.y,
+                blast_w,
+                blast_h,
+                container.x,
+                container.y,
+                2,
+                2,
+            ) {
+                continue;
+            }
+            *burst_alternator = !*burst_alternator;
+            sfx.write(PlaySfx(if *burst_alternator {
+                snd::BARREL_DESTROY_1
+            } else {
+                snd::BARREL_DESTROY_2
+            }));
+            debug!("explosion burst container at ({}, {})", container.x, container.y);
+            commands.entity(entity).despawn();
+            effects::spawn_pounce_debris(&mut commands, &effects, container.x, container.y);
+            effects::spawn_score_effect(
+                &mut commands,
+                &effects,
+                POUNCE_SCORE,
+                container.x,
+                container.y,
+            );
+            score.0 += POUNCE_SCORE;
         }
     }
 }

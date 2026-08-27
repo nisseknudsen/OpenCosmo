@@ -245,6 +245,11 @@ pub struct Enemy {
     /// Actors flagged `acrophile` in `ConstructActor` happily walk off
     /// ledges; the rest turn around at one.
     pub acrophile: bool,
+    /// `Actor.forceactive` - ticks even while off screen. Set permanently
+    /// once a `stay_active` actor has been seen (game1.c:7858-7864).
+    pub force_active: bool,
+    /// `Actor.stayactive` - dormant until first seen, then always active.
+    pub stay_active: bool,
     /// Pounces still needed to kill this actor, and the recoil each one
     /// gives the player. Held per-instance rather than looked up per-kind
     /// because a ceiling-mounted jump pad is the same kind as a floor one
@@ -260,6 +265,7 @@ pub struct Enemy {
 }
 
 impl Enemy {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: EnemyKind,
         data: [i32; 5],
@@ -268,15 +274,14 @@ impl Enemy {
         width_tiles: i32,
         height_tiles: i32,
         frames: Vec<Handle<Image>>,
+        flags: cosmo_assets::actor_flags::ActorFlags,
     ) -> Self {
-        // ConstructActor marks the cabbage and parachute ball as acrophile
-        // (game1.c:5691, 5843); everything else ported here is not.
-        let acrophile = matches!(kind, EnemyKind::Cabbage | EnemyKind::ParachuteBall);
-        // Only the baby ghost opts into the shared gravity pass so far.
-        // Several already-ported actors are weighted in the original too,
-        // but their current behaviour is verified as-is and retro-fitting
-        // gravity to them would change it - left for a deliberate pass.
-        let weighted = matches!(kind, EnemyKind::BabyGhost);
+        // All four now come from the actor's own ConstructActor call rather
+        // than from a guess per kind - see `cosmo_assets::actor_flags`. The
+        // pair that matters most is stay_active + weighted, which is how a
+        // prize perched out of view falls once you look up at it.
+        let acrophile = flags.acrophile;
+        let weighted = flags.weighted;
         let spec = kind.pounce_spec();
         let mut pounce_hits = spec.map(|s| s.hits).unwrap_or(0);
         let pounce_recoil = spec.map(|s| s.recoil).unwrap_or(0);
@@ -323,6 +328,8 @@ impl Enemy {
             west_free: true,
             east_free: true,
             acrophile,
+            force_active: flags.force_active,
+            stay_active: flags.stay_active,
             frames,
             // Seed from the spawn position so each actor desynchronises
             // from its neighbours but stays deterministic across runs.
@@ -804,11 +811,26 @@ fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
 
+/// `IsSpriteVisible` (game1.c:916-931): does this actor's box overlap the
+/// scroll window?
+pub fn is_visible_at(x: i32, y: i32, w: i32, h: i32, sx: i32, sy: i32) -> bool {
+    use crate::camera::{SCROLL_H, SCROLL_W};
+    let horizontal = (sx <= x && sx + SCROLL_W > x) || (sx >= x && x + w > sx);
+    let vertical = (sy + SCROLL_H > (y - h) + 1 && sy + SCROLL_H <= y)
+        || (y >= sy && sy + SCROLL_H > y);
+    horizontal && vertical
+}
+
+fn is_visible(e: &Enemy, scroll: &crate::camera::Scroll) -> bool {
+    is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y)
+}
+
 pub fn tick_enemies(
     mut query: Query<(&mut Enemy, &mut Transform, &mut Sprite, &mut Visibility)>,
     player_q: Query<&Player>,
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
+    scroll: Res<crate::camera::Scroll>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -816,9 +838,34 @@ pub fn tick_enemies(
     let Some(level) = data.load_level(&level_data.name) else {
         return;
     };
+    // Falling off the bottom of the map kills an actor rather than letting
+    // it fall forever (game1.c:7849-7852).
+    let floor = crate::camera::max_scroll_y(level.width) + crate::camera::SCROLL_H + 3;
 
     for (mut e, mut transform, mut sprite, mut visibility) in &mut query {
         if e.dead {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        if e.y > floor {
+            e.dead = true;
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+
+        // `ProcessActor`'s activation gate (game1.c:7858-7864). An actor
+        // that is off screen and not force-active does not tick at all -
+        // which is what leaves a prize perched on a tall structure sitting
+        // there until the view reaches it. Seeing a `stay_active` actor
+        // wakes it permanently, and if it is also `weighted` it starts
+        // falling: that pair is the whole "look up and the bonus drops"
+        // mechanic.
+        let visible = is_visible(&e, &scroll);
+        if visible {
+            if e.stay_active {
+                e.force_active = true;
+            }
+        } else if !e.force_active {
             *visibility = Visibility::Hidden;
             continue;
         }
@@ -1528,5 +1575,40 @@ fn tick_pyramid(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameDa
         e.dead = true;
     } else {
         e.y += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::{SCROLL_H, SCROLL_W};
+
+    #[test]
+    fn an_actor_inside_the_window_is_visible() {
+        assert!(is_visible_at(10, 10, 2, 2, 0, 0));
+    }
+
+    #[test]
+    fn an_actor_beyond_either_edge_is_not() {
+        assert!(!is_visible_at(SCROLL_W + 5, 10, 2, 2, 0, 0));
+        assert!(!is_visible_at(10, SCROLL_H + 5, 2, 2, 0, 0));
+        assert!(!is_visible_at(-10, 10, 2, 2, 0, 0));
+    }
+
+    #[test]
+    fn an_actor_straddling_an_edge_still_counts() {
+        // Half on screen is on screen - otherwise something would wake only
+        // once fully inside, a tile late.
+        assert!(is_visible_at(-1, 10, 3, 2, 0, 0));
+        assert!(is_visible_at(SCROLL_W - 1, 10, 3, 2, 0, 0));
+    }
+
+    #[test]
+    fn scrolling_up_brings_a_perched_actor_into_view() {
+        // The mechanic: a star at row 20 with the player's view starting at
+        // row 26 is out of sight, and looking up to row 19 reveals it.
+        let star = |sy| is_visible_at(19, 20, 2, 2, 4, sy);
+        assert!(!star(26), "should be above the window");
+        assert!(star(19), "looking up should reveal it");
     }
 }

@@ -23,9 +23,12 @@ fn interval() -> u32 {
 pub fn trace_tick(
     player_q: Query<&Player>,
     enemies: Query<&Enemy>,
+    containers: Query<&crate::actors::Container>,
     scroll: Res<Scroll>,
     near_globe: Res<crate::hints::NearHintGlobe>,
     paused: Res<crate::help::Paused>,
+    stars: Res<crate::flow::Stars>,
+    score: Res<crate::flow::Score>,
     mut tick: Local<u32>,
 ) {
     *tick += 1;
@@ -36,10 +39,24 @@ pub fn trace_tick(
         return;
     };
     let alive = enemies.iter().filter(|e| !e.dead).count();
+    // COSMO_WATCH=<x> lists the y of every live actor in that column, for
+    // watching a specific one move.
+    if let Ok(col) = std::env::var("COSMO_WATCH") {
+        if let Ok(col) = col.trim().parse::<i32>() {
+            let mut ys: Vec<i32> = enemies
+                .iter()
+                .filter(|e| !e.dead && (e.x - col).abs() <= 2)
+                .map(|e| e.y)
+                .collect();
+            ys.sort_unstable();
+            println!("  watch x={col}: ys={ys:?}");
+        }
+    }
     println!(
         "t={t} pos=({x},{y}) face={face} frame={frame} scroll=({sx},{sy}) \
          rel_row={rel} fall={fall}/{ft} jump={jt} cling={cling}{slip} \
-         health={hp} dead={dead} enemies={alive} globe={globe} paused={paused}",
+         health={hp} dead={dead} enemies={alive} barrels={barrels} globe={globe} paused={paused} \
+         stars={stars} score={score}",
         t = *tick,
         x = p.x,
         y = p.y,
@@ -63,11 +80,14 @@ pub fn trace_tick(
         hp = p.health,
         dead = p.dead_timer,
         alive = alive,
+        barrels = containers.iter().count(),
         globe = near_globe
             .0
             .map(|h| h.to_string())
             .unwrap_or_else(|| "-".into()),
         paused = paused.0 as u8,
+        stars = stars.0,
+        score = score.0,
     );
 }
 

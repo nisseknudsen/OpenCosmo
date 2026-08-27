@@ -18,6 +18,13 @@ pub struct ExitTrigger {
     pub y: i32,
 }
 
+/// The exit sign, which ends the level once it scrolls into view.
+#[derive(Component)]
+pub struct ExitSign {
+    pub x: i32,
+    pub y: i32,
+}
+
 #[derive(Component)]
 pub struct Collectible {
     pub x: i32,
@@ -38,10 +45,31 @@ pub struct Container {
     pub contents: u16,
 }
 
-/// `ACT_*` ids (map_type - 31) that end a level on player contact
-/// (actor.h: ACT_EXIT_MONSTER_W=149, ACT_EXIT_MONSTER_N=247,
-/// ACT_EXIT_PLANT=186, ACT_EXIT_TRANSPORTER=203).
-pub const EXIT_ACT_IDS: [u16; 4] = [149, 247, 186, 203];
+/// `ACT_*` ids (map_type - 31) that end the level.
+///
+/// The important one is `ACT_EXIT_SIGN` (39), which this list used to be
+/// missing entirely - and it is the *only* exit in episode 1's first level,
+/// so there was no way to finish it. Its tick function is `ActFootSwitch`,
+/// which does nothing at all; the level actually ends from the sprite-keyed
+/// interaction switch (`case SPR_EXIT_SIGN: winLevel = true`,
+/// game1.c:7551-7553), which is easy to miss when reading the actor table.
+///
+/// That case has no proximity test either - reaching it inside
+/// `InteractPlayer` already means the actor passed `IsSpriteVisible`
+/// (game1.c:7071), so the sign ends the level once it is on screen. In
+/// practice that is the same thing: a1 puts it at x=508 of a 512-wide map,
+/// which the view can only reach at the very end.
+///
+/// The others (ACT_EXIT_MONSTER_W=149, ACT_EXIT_PLANT=186,
+/// ACT_EXIT_TRANSPORTER=203) genuinely need touching - they play a
+/// swallow/transport animation first, which is not ported, so they are
+/// treated as contact triggers. ACT_EXIT_MONSTER_N (247) is *not* here: it
+/// is `ActFootSwitch` too, and its own exit case is compiled out of episode
+/// 1 entirely (`#ifdef HAS_ACT_EXIT_MONSTER_N`, game1.c:7819).
+pub const EXIT_ACT_IDS: [u16; 3] = [149, 186, 203];
+
+/// `ACT_EXIT_SIGN` - ends the level on becoming visible, not on contact.
+pub const ACT_EXIT_SIGN: u16 = 39;
 
 const SPR_HINT_GLOBE: u16 = 125;
 const SPR_EYE_PLANT: u16 = 95;
@@ -227,6 +255,29 @@ fn spawn_eye_plant(
     ));
 }
 
+/// Keeps the interaction markers on an actor in step with where it has
+/// actually moved to.
+///
+/// `Collectible`, `Container` and `ExitTrigger` each carry their own copy of
+/// a tile position, which was fine while every actor stayed where it was
+/// placed. Actors that move - and now that the `weighted` flag is honoured,
+/// that includes any prize that falls when you look up at it - would
+/// otherwise still be picked up at the spot they were *authored*, and not
+/// where they landed.
+pub fn sync_actor_positions(
+    mut collectibles: Query<(&crate::enemy_ai::Enemy, &mut Collectible)>,
+    mut containers: Query<(&crate::enemy_ai::Enemy, &mut Container)>,
+) {
+    for (enemy, mut c) in &mut collectibles {
+        c.x = enemy.x;
+        c.y = enemy.y;
+    }
+    for (enemy, mut c) in &mut containers {
+        c.x = enemy.x;
+        c.y = enemy.y;
+    }
+}
+
 pub fn spawn_level_actors(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -305,9 +356,16 @@ pub fn spawn_level_actors(
                     (*width_px as f32 / 8.0).ceil() as i32,
                     height_tiles as i32,
                     frames,
+                    cosmo_assets::actor_flags::flags_for(act_type),
                 ),
                 crate::motion::PrevPos { x: a.x as i32, y: a.y as i32 },
             ));
+        }
+        if act_type == ACT_EXIT_SIGN {
+            entity.insert(ExitSign {
+                x: a.x as i32,
+                y: a.y as i32,
+            });
         }
         if EXIT_ACT_IDS.contains(&act_type) {
             entity.insert(ExitTrigger {

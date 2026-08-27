@@ -261,7 +261,9 @@ pub struct EnterLevel(pub String);
 
 pub fn check_level_exit(
     exit_q: Query<&ExitTrigger>,
+    sign_q: Query<&crate::actors::ExitSign>,
     player_q: Query<&Player>,
+    scroll: Res<crate::camera::Scroll>,
     mut sequence: ResMut<LevelSequence>,
     mut enter: EventWriter<EnterLevel>,
 ) {
@@ -274,7 +276,15 @@ pub fn check_level_exit(
     let touching = exit_q
         .iter()
         .any(|e| (e.x - player.x).abs() <= 2 && (e.y - player.y).abs() <= 3);
-    if touching {
+    // The exit sign ends the level on coming into view rather than on
+    // contact - see `actors::EXIT_ACT_IDS` for why.
+    let sign_in_view = sign_q.iter().any(|s| {
+        s.x >= scroll.x
+            && s.x < scroll.x + crate::camera::SCROLL_W
+            && s.y >= scroll.y
+            && s.y < scroll.y + crate::camera::SCROLL_H
+    });
+    if touching || sign_in_view {
         enter.write(EnterLevel(sequence.advance()));
     }
 }
