@@ -25,6 +25,7 @@ pub enum GameState {
     Title,
     Menu,
     Credits,
+    Controls,
     Playing,
 }
 
@@ -39,6 +40,11 @@ pub struct ScreenUi;
 /// `a`, which is why the two ranges need different offsets. Anchors that
 /// pin it down: FONT_0 = 0x0410/40 = tile 26 = `'0'` (ASCII 48) and
 /// FONT_LOWER_A = 0x0ac8/40 = tile 69 = `'a'` (ASCII 97).
+///
+/// One quirk: the slot where `'/'` belongs (tile 25) holds a pound-sign-ish
+/// glyph in the shipped font, so a slash renders as garbage. Its neighbours
+/// `,` `-` `.` are all correct, so this is the artwork rather than the
+/// mapping. Avoid `/` in text we author.
 pub fn font_tile_for_char(c: char) -> Option<usize> {
     match c {
         ' '..='Z' => Some(c as usize - 22),
@@ -91,7 +97,7 @@ pub(crate) fn spawn_text(
 /// globally-inserted camera resource here would be a startup race. Owning
 /// the camera also means it can clear to black - during these screens there
 /// is no game camera underneath to preserve.
-fn spawn_screen_camera(commands: &mut Commands, screen: &crate::presentation::VirtualScreen) -> Entity {
+pub fn spawn_state_camera(commands: &mut Commands, screen: &crate::presentation::VirtualScreen) -> Entity {
     commands
         .spawn((
             ScreenUi,
@@ -141,7 +147,7 @@ fn spawn_fullscreen_image(
     screen: &crate::presentation::VirtualScreen,
     path: &str,
 ) {
-    let camera = spawn_screen_camera(commands, screen);
+    let camera = spawn_state_camera(commands, screen);
     commands
         .spawn(screen_root(camera))
         .with_children(|root| {
@@ -177,6 +183,9 @@ pub fn credits_input(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState
 /// The menu entries we actually implement, in the original's own order.
 const MENU_ITEMS: &[(&str, MenuAction)] = &[
     (" B)egin New Game", MenuAction::Begin),
+    // The original calls this "G)ame Redefine" (game2.c:3629) and splits it
+    // into keyboard and joystick screens; one screen covers both here.
+    (" G)ame Redefine", MenuAction::Controls),
     (" C)redits", MenuAction::Credits),
     (" T)itle Screen", MenuAction::Title),
     (" Q)uit Game", MenuAction::Quit),
@@ -185,6 +194,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
     Begin,
+    Controls,
     Credits,
     Title,
     Quit,
@@ -195,7 +205,7 @@ enum MenuAction {
 const PANEL_X: f32 = 10.0;
 const PANEL_Y: f32 = 2.0;
 const PANEL_W: f32 = 20.0;
-const PANEL_H: f32 = 13.0;
+const PANEL_H: f32 = 15.0;
 
 pub fn spawn_menu(
     mut commands: Commands,
@@ -203,7 +213,7 @@ pub fn spawn_menu(
     hud: Res<HudAssets>,
     screen: Res<crate::presentation::VirtualScreen>,
 ) {
-    let camera = spawn_screen_camera(&mut commands, &screen);
+    let camera = spawn_state_camera(&mut commands, &screen);
     commands
         .spawn(screen_root(camera))
         .with_children(|root| {
@@ -254,6 +264,8 @@ pub fn menu_input(
 ) {
     let action = if keys.just_pressed(KeyCode::KeyB) || keys.just_pressed(KeyCode::Enter) {
         Some(MenuAction::Begin)
+    } else if keys.just_pressed(KeyCode::KeyG) {
+        Some(MenuAction::Controls)
     } else if keys.just_pressed(KeyCode::KeyC) {
         Some(MenuAction::Credits)
     } else if keys.just_pressed(KeyCode::KeyT) {
@@ -266,6 +278,7 @@ pub fn menu_input(
 
     match action {
         Some(MenuAction::Begin) => next.set(GameState::Playing),
+        Some(MenuAction::Controls) => next.set(GameState::Controls),
         Some(MenuAction::Credits) => next.set(GameState::Credits),
         Some(MenuAction::Title) => next.set(GameState::Title),
         Some(MenuAction::Quit) => {

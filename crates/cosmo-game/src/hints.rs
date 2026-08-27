@@ -237,7 +237,10 @@ fn hint_frame(episode: u8, hint: u16) -> TextFrame {
 
     // Episode 1's wider frames for the few long hints (game2.c:3348, 3383).
     let width = if episode == 1 && hint == 18 { 30 } else { 28 };
-    let height = body.len() as i32 + 4;
+    // Body starts at row 5 and the footer sits at `top + height - 2`, so
+    // the frame needs 5 rows above the body plus one blank row below it.
+    // At +4 the last line landed *on* the footer and the two overprinted.
+    let height = body.len() as i32 + 6;
     let mut frame = TextFrame::new(2, height, width, "COSMIC HINT!", "Press any key to exit.");
     for (i, line) in body.iter().enumerate() {
         frame = frame.text(5 + i as i32, line);
@@ -282,6 +285,45 @@ mod tests {
         // A dead player touches nothing (game1.c:1137).
         player.dead_timer = 1;
         assert!(!touching_player(&player, 10, 10, 3, 3));
+    }
+
+    #[test]
+    fn no_hint_body_collides_with_the_frames_footer() {
+        // The footer is drawn at `top + height - 2`. At the wrong height the
+        // last body line lands on that exact row and the two overprint,
+        // which is what "key to reread them." + "Press any key to exit."
+        // did before - a legible-looking but unreadable mess.
+        for episode in 1..=3u8 {
+            for hint in 0..=25u16 {
+                let f = hint_frame(episode, hint);
+                let footer_row = f.top + f.height - 2;
+                let title_row = f.top + 1;
+                for (_, row, text) in f.lines_for_test() {
+                    assert_ne!(
+                        *row, footer_row,
+                        "ep{episode} hint {hint}: {text:?} lands on the footer row"
+                    );
+                    assert_ne!(*row, title_row, "ep{episode} hint {hint}: {text:?} on the title");
+                    assert!(
+                        *row > f.top && *row < f.top + f.height - 1,
+                        "ep{episode} hint {hint}: {text:?} is outside the frame"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hint_text_avoids_the_fonts_broken_slash_glyph() {
+        // The font's `/` slot holds a pound-sign-ish glyph, so any slash in
+        // authored text renders as garbage - see `font_tile_for_char`.
+        for episode in 1..=3u8 {
+            for hint in 0..=25u16 {
+                for (_, _, text) in hint_frame(episode, hint).lines_for_test() {
+                    assert!(!text.contains('/'), "ep{episode} hint {hint}: {text:?}");
+                }
+            }
+        }
     }
 
     #[test]

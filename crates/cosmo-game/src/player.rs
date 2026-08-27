@@ -205,9 +205,14 @@ impl InputScript {
     }
 }
 
+/// Collects this tick's controls.
+///
+/// The live path just drains `InputAccumulator`, which has been sampling
+/// every frame - see `input.rs` for why the gameplay tick can't read the
+/// keyboard directly.
 pub fn read_input(
-    keys: Res<ButtonInput<KeyCode>>,
     mut input: ResMut<PlayerInput>,
+    mut accum: ResMut<crate::input::InputAccumulator>,
     mut tick: Local<u32>,
     mut script: Local<Option<InputScript>>,
 ) {
@@ -218,28 +223,19 @@ pub fn read_input(
         return;
     }
     if std::env::var("COSMO_AUTOPLAY").is_ok() {
-        input.west = false;
-        input.east = true;
-        // Tap rather than hold: the jump latch deliberately blocks a
-        // re-jump until the key is released (game1.c:8793-8797), so a held
-        // key would mask whether jumping is possible at all.
+        *input = PlayerInput {
+            east: true,
+            // Tap rather than hold: the jump latch deliberately blocks a
+            // re-jump until the key is released (game1.c:8793-8797), so a
+            // held key would mask whether jumping is possible at all.
+            jump: *tick % 12 == 0,
+            bomb: *tick % 40 == 0,
+            ..default()
+        };
         *tick += 1;
-        input.jump = *tick % 12 == 0;
-        input.bomb = *tick % 40 == 0;
         return;
     }
-    input.west = keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA);
-    input.east = keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD);
-    // The original's defaults are Ctrl to jump and Alt to bomb
-    // (game2.c:2976-2977). Both are kept, with Space added as a modern
-    // alternative for jump - putting bombs on Ctrl instead would collide
-    // with the muscle memory of anyone who played the original.
-    input.jump = keys.pressed(KeyCode::Space)
-        || keys.pressed(KeyCode::ControlLeft)
-        || keys.pressed(KeyCode::ControlRight);
-    input.look_up = keys.pressed(KeyCode::ArrowUp) || keys.pressed(KeyCode::KeyW);
-    input.look_down = keys.pressed(KeyCode::ArrowDown) || keys.pressed(KeyCode::KeyS);
-    input.bomb = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+    *input = accum.take();
 }
 
 fn attr_at(level: &crate::data::LevelJson, data: &GameData, x: i32, y: i32) -> u8 {

@@ -2,6 +2,7 @@ mod actors;
 mod audio;
 mod camera;
 mod combat;
+mod controls_screen;
 mod data;
 mod devmenu;
 mod effects;
@@ -11,6 +12,7 @@ mod flow;
 mod help;
 mod hints;
 mod hud;
+mod input;
 mod level;
 mod panel;
 mod pickups;
@@ -55,10 +57,14 @@ fn main() {
         .insert_state(match std::env::var("COSMO_STATE").as_deref() {
             Ok("menu") => GameState::Menu,
             Ok("credits") => GameState::Credits,
+            Ok("controls") => GameState::Controls,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
         .init_resource::<PlayerInput>()
+        .insert_resource(input::load_bindings())
+        .init_resource::<input::InputAccumulator>()
+        .init_resource::<controls_screen::Rebinding>()
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
         .init_resource::<flow::Checkpoint>()
@@ -80,12 +86,18 @@ fn main() {
         .add_systems(OnExit(GameState::Menu), screen::despawn_screen)
         .add_systems(OnEnter(GameState::Credits), screen::spawn_credits)
         .add_systems(OnExit(GameState::Credits), screen::despawn_screen)
+        .add_systems(OnEnter(GameState::Controls), controls_screen::spawn_controls)
+        .add_systems(OnExit(GameState::Controls), screen::despawn_screen)
         .add_systems(
             Update,
             (
                 screen::title_input.run_if(in_state(GameState::Title)),
                 screen::credits_input.run_if(in_state(GameState::Credits)),
                 screen::menu_input.run_if(in_state(GameState::Menu)),
+                controls_screen::controls_input.run_if(in_state(GameState::Controls)),
+                // Sampled every frame, drained by the gameplay tick - see
+                // `input.rs` for why the 18.2Hz tick can't read keys itself.
+                input::sample_input,
             ),
         )
         // --- Gameplay ---
@@ -146,11 +158,12 @@ fn main() {
             (
                 player::read_input,
                 trace::trace_tick.run_if(trace::trace_enabled),
-                trace::screenshot_at,
-                trace::quit_after,
             )
                 .run_if(in_state(GameState::Playing)),
         )
+        // Capture and auto-quit are not gameplay - they have to work on the
+        // menus too, which is where several of the things worth checking are.
+        .add_systems(Update, (trace::screenshot_at, trace::quit_after))
         .add_systems(
             Update,
             (

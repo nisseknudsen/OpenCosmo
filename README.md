@@ -74,6 +74,11 @@ from source.
   at all. Rendering to a fixed buffer is also what let the layout match the
   original's screen exactly, including the 8px black border around the play
   area that the window-relative version had no way to express.
+- Six rebindable actions (the same six the original stores), each carrying
+  several bindings at once so keyboard and gamepad work without a mode
+  switch. Input is sampled every frame and drained by the 18.2Hz gameplay
+  tick, so a press shorter than ~55ms can no longer fall between two ticks
+  and be lost — which used to look like the physics dropping a jump.
 - F1 opens the help menu (restart, level warp, quit). The original also
   offers Save/Restore/Help/Game-redefine/High-scores, which depend on
   unported subsystems, so only working entries are listed. "L)evel Warp"
@@ -106,6 +111,14 @@ To point at an installer somewhere else: `COSMO_INSTALLER=/path/to/installer.sh 
 drop a bomb, Up/Down (or W/S) to look up/down while stationary. Jump onto
 a creature to pounce it. Ctrl/Alt match the original's own defaults; Space
 is added as a modern alternative for jump.
+
+Gamepads work without configuration (d-pad or left stick to move, bottom
+face button to jump, left face button to bomb), and everything is
+rebindable from **G)ame Redefine** on the main menu — pick an action's
+number, press the key, button or stick direction you want, and it is saved
+to `$XDG_CONFIG_HOME/cosmo-reboot/controls.json`. A stick is treated as a
+d-pad with a firm deadzone: movement is tile-stepped at 18.2Hz, so there
+is no sub-tile precision for an analogue reading to express.
 
 **Menu**: any key at the title screen, then B to begin, C for credits,
 T back to the title, Q to quit. In game, F1 opens the help menu (R to

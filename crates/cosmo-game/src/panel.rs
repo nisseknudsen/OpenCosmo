@@ -60,6 +60,11 @@ impl TextFrame {
         self.left() + 1
     }
 
+    #[cfg(test)]
+    pub fn lines_for_test(&self) -> &[(i32, i32, String)] {
+        &self.lines
+    }
+
     pub fn line(mut self, x: i32, row: i32, text: &str) -> Self {
         self.lines.push((x, row, text.to_string()));
         self
