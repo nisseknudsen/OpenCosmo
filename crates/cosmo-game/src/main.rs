@@ -14,6 +14,7 @@ mod hints;
 mod hud;
 mod input;
 mod level;
+mod motion;
 mod panel;
 mod pickups;
 mod player;
@@ -32,6 +33,34 @@ use screen::{GameState, UiCamera};
 
 const START_LEVEL: &str = "a1";
 
+/// `COSMO_VSYNC=off` uncaps the frame rate.
+///
+/// Vsync is the right default - it is what stops tearing, and the game's
+/// logic runs on its own fixed 18.2Hz clock regardless, so a higher frame
+/// rate buys smoother *presentation* and nothing else. Uncapped is mostly
+/// useful for measuring what a frame actually costs, since a vsynced frame
+/// that misses its deadline reports the next multiple down and tells you
+/// nothing about by how much.
+fn present_mode() -> bevy::window::PresentMode {
+    match std::env::var("COSMO_VSYNC").as_deref() {
+        Ok("off") | Ok("no") => bevy::window::PresentMode::AutoNoVsync,
+        _ => bevy::window::PresentMode::AutoVsync,
+    }
+}
+
+/// `COSMO_WINDOW=1280x800` sets the starting window size. Mostly for
+/// like-for-like performance comparisons: a window the compositor decides
+/// to maximise has several times the pixel count of one it leaves alone,
+/// and the present shader's cost is per output pixel.
+fn window_size() -> bevy::window::WindowResolution {
+    let parsed = std::env::var("COSMO_WINDOW").ok().and_then(|v| {
+        let (w, h) = v.split_once(['x', 'X'])?;
+        Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
+    });
+    let (w, h) = parsed.unwrap_or((1024.0, 640.0));
+    bevy::window::WindowResolution::new(w, h)
+}
+
 fn main() {
     let mut app = App::new();
     app.add_plugins(
@@ -44,7 +73,8 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Cosmo's Cosmic Adventure (Reboot)".into(),
-                        resolution: (1024.0, 640.0).into(),
+                        resolution: window_size(),
+                        present_mode: present_mode(),
                         ..default()
                     }),
                     ..default()
@@ -71,6 +101,7 @@ fn main() {
         .init_resource::<help::Paused>()
         .init_resource::<audio::AudioMode>()
         .init_resource::<camera::Scroll>()
+        .init_resource::<motion::PrevScroll>()
         .init_resource::<hints::NearHintGlobe>()
         .init_resource::<hints::SawAutoHintGlobe>()
         .init_resource::<hints::HintLatch>()
@@ -118,6 +149,7 @@ fn main() {
             FixedUpdate,
             (
                 (
+                    motion::snapshot_positions,
                     player::move_player_tick,
                     enemy::move_walkers,
                     // Runs before hazard_damage so contact tests see this
@@ -130,7 +162,8 @@ fn main() {
                     enemy::hazard_damage,
                     combat::place_bomb,
                     combat::tick_bombs,
-                ),
+                )
+                    .chain(),
                 (
                     effects::tick_explosions,
                     combat::explosion_damage,
@@ -146,8 +179,15 @@ fn main() {
                     player::update_frame_and_scroll,
                     hints::read_hint_globe,
                     sfx::play_queued_sfx,
-                ),
+                )
+                    .chain(),
             )
+                // Both halves need `.chain()` of their own. Chaining the
+                // outer tuple only orders the two groups against each other
+                // - the systems *inside* each group are left unordered, so
+                // splitting this chain in two (to get under the 20-element
+                // tuple limit) silently dropped every ordering constraint
+                // within a half.
                 .chain()
                 .after(player::read_input)
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
@@ -165,7 +205,8 @@ fn main() {
         )
         // Capture and auto-quit are not gameplay - they have to work on the
         // menus too, which is where several of the things worth checking are.
-        .add_systems(Update, (trace::screenshot_at, trace::quit_after))
+        .add_systems(Update, (trace::screenshot_at, trace::report_frame_rate, trace::quit_after))
+        .add_systems(PostUpdate, trace::trace_drawn_position)
         .add_systems(
             Update,
             (
@@ -174,6 +215,14 @@ fn main() {
                 actors::animate_sprites,
                 actors::track_player,
                 camera::apply_scroll,
+                // Overrides the snapped positions above with interpolated
+                // ones. Ordered after them so either can be the last word.
+                (
+                    motion::interpolate_player,
+                    motion::interpolate_enemies,
+                    motion::interpolate_scroll,
+                )
+                    .run_if(motion::interpolation_enabled),
                 level::scroll_backdrop,
                 hud::update_status_bar,
                 audio::update_music,
@@ -302,6 +351,7 @@ fn setup_game(
     saw_auto.0 = false;
     commands.spawn((
         player,
+        motion::PrevPos { x: start_x as i32, y: start_y as i32 },
         Sprite {
             image: player_frames.0.first().cloned().unwrap_or_default(),
             ..default()

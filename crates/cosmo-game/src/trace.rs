@@ -108,6 +108,72 @@ pub fn screenshot_at(
     commands.spawn(shot).observe(save_to_disk(path));
 }
 
+/// `COSMO_FPS=1` reports frame pacing once a second: the average rate and
+/// the worst frame in the window. The worst frame is the one that matters
+/// for "feels laggy" - an average of 60 with occasional 100ms spikes feels
+/// far worse than a steady 45.
+pub fn report_frame_rate(
+    time: Res<Time>,
+    windows: Query<&Window>,
+    mut frames: Local<u32>,
+    mut elapsed: Local<f32>,
+    mut worst: Local<f32>,
+) {
+    if std::env::var("COSMO_FPS").is_err() {
+        return;
+    }
+    let dt = time.delta_secs();
+    *frames += 1;
+    *elapsed += dt;
+    *worst = worst.max(dt);
+    if *elapsed >= 1.0 {
+        // The window size has to be part of the report: a window the
+        // compositor decided to maximise is several times the pixel count
+        // of one it left alone, and comparing two runs without it is
+        // comparing nothing.
+        let size = windows
+            .single()
+            .map(|w| w.resolution.physical_size())
+            .unwrap_or_default();
+        println!(
+            "fps={:.1} avg_frame={:.2}ms worst_frame={:.2}ms window={}x{}",
+            *frames as f32 / *elapsed,
+            *elapsed * 1000.0 / *frames as f32,
+            *worst * 1000.0,
+            size.x,
+            size.y
+        );
+        *frames = 0;
+        *elapsed = 0.0;
+        *worst = 0.0;
+    }
+}
+
+/// `COSMO_MOTION=1` logs the player's *drawn* position every frame, which
+/// is the only way to see whether interpolation is doing anything - the
+/// tick trace shows the simulation, which moves a whole tile at a time by
+/// definition.
+pub fn trace_drawn_position(
+    query: Query<(&Transform, &crate::motion::PrevPos, &crate::player::Player)>,
+    fixed: Res<Time<bevy::time::Fixed>>,
+    mut frames: Local<u32>,
+) {
+    if std::env::var("COSMO_MOTION").is_err() {
+        return;
+    }
+    *frames += 1;
+    if let Ok((t, prev, p)) = query.single() {
+        println!(
+            "frame={} drawn_x={:.1} now={} prev={} alpha={:.3}",
+            *frames,
+            t.translation.x,
+            p.x,
+            prev.x,
+            fixed.overstep_fraction()
+        );
+    }
+}
+
 /// `COSMO_QUIT_AFTER=<ticks>` ends the run on its own, so a verification
 /// command terminates instead of needing to be killed.
 pub fn quit_after(mut ticks: Local<u32>, mut exit: EventWriter<AppExit>) {

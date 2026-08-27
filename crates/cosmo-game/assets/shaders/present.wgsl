@@ -84,11 +84,17 @@ fn same(a: vec3<f32>, b: vec3<f32>) -> bool {
 // (`B == D && B != F`) is false, so dithered regions pass through
 // untouched - which is why this can be applied to the whole frame rather
 // than to hand-picked assets.
-fn scale3x(uv: vec2<f32>) -> vec3<f32> {
+//
+// All nine output sub-cells of a source pixel derive from the *same* 3x3
+// neighbourhood, so the whole block is computed from one set of nine
+// fetches. Sampling per output pixel instead cost four evaluations - 36
+// fetches - and was enough to miss a 120Hz vsync deadline and halve the
+// frame rate.
+fn scale3x_sampled(uv: vec2<f32>) -> vec3<f32> {
     let texel = uv * settings.source_size;
     let base = floor(texel);
-    let cell = clamp(floor((texel - base) * 3.0), vec2(0.0), vec2(2.0));
 
+    // The nine inputs, fetched exactly once for the whole block.
     let a = texel_at(base, vec2(-1.0, -1.0));
     let b = texel_at(base, vec2(0.0, -1.0));
     let c = texel_at(base, vec2(1.0, -1.0));
@@ -99,35 +105,44 @@ fn scale3x(uv: vec2<f32>) -> vec3<f32> {
     let h = texel_at(base, vec2(0.0, 1.0));
     let i = texel_at(base, vec2(1.0, 1.0));
 
-    // Flat in one axis or the other: nothing to round off.
+    var cells: array<vec3<f32>, 9>;
+    // Flat in one axis or the other: nothing to round off. This is also the
+    // guard that lets dithering through untouched - on a checkerboard both
+    // halves of it hold.
     if same(b, h) || same(d, f) {
-        return e;
+        for (var n = 0; n < 9; n++) { cells[n] = e; }
+    } else {
+        cells[0] = select(e, d, same(d, b));
+        cells[1] = select(e, b, (same(d, b) && !same(e, c)) || (same(b, f) && !same(e, a)));
+        cells[2] = select(e, f, same(b, f));
+        cells[3] = select(e, d, (same(d, b) && !same(e, g)) || (same(d, h) && !same(e, a)));
+        cells[4] = e;
+        cells[5] = select(e, f, (same(b, f) && !same(e, i)) || (same(h, f) && !same(e, c)));
+        cells[6] = select(e, d, same(d, h));
+        cells[7] = select(e, h, (same(d, h) && !same(e, i)) || (same(h, f) && !same(e, g)));
+        cells[8] = select(e, f, same(h, f));
     }
 
-    let index = i32(cell.y) * 3 + i32(cell.x);
-    switch index {
-        case 0: { if same(d, b) { return d; } }
-        case 1: { if (same(d, b) && !same(e, c)) || (same(b, f) && !same(e, a)) { return b; } }
-        case 2: { if same(b, f) { return f; } }
-        case 3: { if (same(d, b) && !same(e, g)) || (same(d, h) && !same(e, a)) { return d; } }
-        case 5: { if (same(b, f) && !same(e, i)) || (same(h, f) && !same(e, c)) { return f; } }
-        case 6: { if same(d, h) { return d; } }
-        case 7: { if (same(d, h) && !same(e, i)) || (same(h, f) && !same(e, g)) { return h; } }
-        case 8: { if same(h, f) { return f; } }
-        default: {}
-    }
-    return e;
-}
+    // Sub-cells land on fractional output pixels for exactly the reason
+    // source pixels did before sharp-bilinear existed, and need the same
+    // treatment one level down: the 3x3 block is treated as a little
+    // texture with texels at 0.5, 1.5 and 2.5, sampled with the same ramp.
+    // Neighbours clamp inside the block, which is off by at most half an
+    // output pixel at a source-pixel boundary.
+    let q = (texel - base) * 3.0 - 0.5;
+    let cell = floor(q);
+    let sub_scale = settings.output_size / (settings.source_size * 3.0);
+    let ramp = clamp(((q - cell) - 0.5) * sub_scale, vec2(-0.5), vec2(0.5)) + 0.5;
 
-// The upscale trebles the resolution, so its cells land on fractional
-// output pixels for the same reason source pixels did before sharp-bilinear
-// existed. Four taps a quarter-pixel apart average that unevenness out.
-fn scale3x_sampled(uv: vec2<f32>) -> vec3<f32> {
-    let o = 0.25 / settings.output_size;
-    return 0.25 * (scale3x(uv + vec2(-o.x, -o.y))
-                 + scale3x(uv + vec2(o.x, -o.y))
-                 + scale3x(uv + vec2(-o.x, o.y))
-                 + scale3x(uv + vec2(o.x, o.y)));
+    let x0 = i32(clamp(cell.x, 0.0, 2.0));
+    let y0 = i32(clamp(cell.y, 0.0, 2.0));
+    let x1 = i32(clamp(cell.x + 1.0, 0.0, 2.0));
+    let y1 = i32(clamp(cell.y + 1.0, 0.0, 2.0));
+
+    return mix(
+        mix(cells[y0 * 3 + x0], cells[y0 * 3 + x1], ramp.x),
+        mix(cells[y1 * 3 + x0], cells[y1 * 3 + x1], ramp.x),
+        ramp.y);
 }
 
 // Very slight barrel distortion. Kept subtle on purpose: enough to suggest

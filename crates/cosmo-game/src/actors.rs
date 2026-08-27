@@ -296,14 +296,17 @@ pub fn spawn_level_actors(
                 .iter()
                 .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
                 .collect();
-            entity.insert(crate::enemy_ai::Enemy::new(
-                kind,
-                init,
-                a.x as i32,
-                a.y as i32,
-                (*width_px as f32 / 8.0).ceil() as i32,
-                height_tiles as i32,
-                frames,
+            entity.insert((
+                crate::enemy_ai::Enemy::new(
+                    kind,
+                    init,
+                    a.x as i32,
+                    a.y as i32,
+                    (*width_px as f32 / 8.0).ceil() as i32,
+                    height_tiles as i32,
+                    frames,
+                ),
+                crate::motion::PrevPos { x: a.x as i32, y: a.y as i32 },
             ));
         }
         if EXIT_ACT_IDS.contains(&act_type) {

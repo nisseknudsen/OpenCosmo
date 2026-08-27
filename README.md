@@ -84,12 +84,20 @@ from source.
   at all. Rendering to a fixed buffer is also what let the layout match the
   original's screen exactly, including the 8px black border around the play
   area that the window-relative version had no way to express.
-- Optional **Scale3x** smoothing of the artwork, toggled with **F7** and
-  off by default. Chosen over the smoother upscalers (xBRZ, HQx, neural)
-  for one property: it only ever *copies* a neighbouring pixel, never
-  blends two, so the 16-colour EGA palette survives exactly. It also leaves
-  dithering alone, which matters because this game's backdrops run to 27%
-  dither by pixel count and a blending upscaler turns that into blobs.
+- **Scale3x** smoothing of the artwork, part of the remaster preset.
+  Chosen over the smoother upscalers (xBRZ, HQx, neural) for one property:
+  it only ever *copies* a neighbouring pixel, never blends two, so the
+  16-colour EGA palette survives exactly. It also leaves dithering alone,
+  which matters because this game's backdrops run to 27% dither by pixel
+  count and a blending upscaler turns that into blobs.
+- **Smooth motion**, also part of the remaster preset. Game logic stays on
+  its 18.2Hz tick — every physics constant is expressed per tick, so
+  raising the rate would just make Cosmo run three times faster — but
+  drawing is decoupled from it, so a tick's worth of movement is spread
+  across the frames that fall inside it. Measured: 176 distinct drawn
+  positions across a walk instead of 53, in 1–3 pixel steps rather than
+  8-pixel jumps, and still landing on whole pixels so the pixel grid (and
+  Scale3x) is undisturbed.
 - Six rebindable actions (the same six the original stores), each carrying
   several bindings at once so keyboard and gamepad work without a mode
   switch. Input is sampled every frame and drained by the 18.2Hz gameplay
@@ -136,6 +144,18 @@ to `$XDG_CONFIG_HOME/cosmo-reboot/controls.json`. A stick is treated as a
 d-pad with a firm deadzone: movement is tile-stepped at 18.2Hz, so there
 is no sub-tile precision for an analogue reading to express.
 
+**Presentation**: **F5** switches between two presets — *remaster*
+(sharp scaling, Scale3x smoothing, scanlines, bloom, smooth motion) and
+*authentic* (whole-number scaling, letterboxed, untouched pixels, 18.2Hz
+motion). Individual effects can be dialled with `COSMO_SCANLINE=0.3`,
+`COSMO_BLOOM`, `COSMO_VIGNETTE`, `COSMO_CURVE`, `COSMO_SMOOTH` and
+`COSMO_SMOOTH_MOTION=on|off`. `COSMO_VSYNC=off` uncaps the frame rate and
+`COSMO_WINDOW=1280x800` sets the window size.
+
+Build with `--release` if it feels sluggish — the game's own crate is only
+at `opt-level = 1` in a dev build, and the present shader's cost scales
+with the window's pixel count.
+
 **Menu**: any key at the title screen, then B to begin, C for credits,
 T back to the title, Q to quit. In game, F1 opens the help menu (R to
 restart the level, L for the level warp, Q back to the main menu, ESC to
@@ -150,7 +170,6 @@ screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
 `COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` /
 `COSMO_WARP=1` open the help menu or level warp on the first frame;
 `COSMO_PRESENT=authentic|remaster` picks the presentation mode;
-`COSMO_ART=pixels|smoothed` picks the artwork treatment;
 `COSMO_AUDIO=authentic|remaster` picks the soundtrack;
 `COSMO_EPISODE=1|2|3` picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
@@ -165,7 +184,10 @@ frame, scroll, cling and live enemy count every nth tick;
 tick 30), `COSMO_SHOT_RAW=1` grabs the 320x200 virtual screen instead —
 the one to use for pixel-alignment questions, since it hasn't been through
 the present shader or the display's scale factor — and
-`COSMO_QUIT_AFTER=<ticks>` ends the run. So, for example,
+`COSMO_QUIT_AFTER=<ticks>` ends the run. `COSMO_FPS=1` reports frame
+pacing (with the window size, without which two runs aren't comparable)
+and `COSMO_MOTION=1` logs the player's *drawn* position every frame,
+which is the only way to see whether interpolation is doing anything. So, for example,
 checking that looking up and down actually pans the view:
 
 ```sh
