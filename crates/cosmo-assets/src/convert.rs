@@ -9,6 +9,23 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Writes interleaved stereo i16 PCM to a WAV file.
+fn write_wav_stereo(pcm: &[i16], sample_rate: u32, out_path: &Path) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(out_path, spec)
+        .with_context(|| format!("creating {}", out_path.display()))?;
+    for sample in pcm {
+        writer.write_sample(*sample)?;
+    }
+    writer.finalize()?;
+    Ok(())
+}
+
 const ATLAS_COLS: u32 = 40;
 /// Status bar geometry from DrawStaticGameScreen() (game2.c:3597-3604):
 /// screen rows 19..24 x columns 1..38.
@@ -473,6 +490,12 @@ pub fn convert_episode(sh_path: &Path, out_dir: &Path, episode: u8) -> Result<Ve
     // rendered from IMF to WAV via an OPL2 emulator (see music.rs). ---
     let music_dir = out_dir.join("music");
     std::fs::create_dir_all(&music_dir)?;
+    // The remastered soundtrack: the same score, re-voiced. See notes.rs
+    // (recovering notes from the register stream) and lofi.rs (rendering
+    // them). Emitted alongside the authentic mix rather than replacing it,
+    // so the game can switch between them at runtime.
+    let remaster_dir = out_dir.join("music_remaster");
+    std::fs::create_dir_all(&remaster_dir)?;
     for name in level::MUSIC_NAMES {
         let upper = name.to_ascii_uppercase();
         let Some(&raw) = vol_map.get(&upper) else {
@@ -483,6 +506,24 @@ pub fn convert_episode(sh_path: &Path, out_dir: &Path, episode: u8) -> Result<Ve
         let stem = name.trim_end_matches(".mni");
         crate::music::render_to_wav(&events, MUSIC_SAMPLE_RATE, &music_dir.join(format!("{stem}.wav")))
             .with_context(|| format!("rendering music track {name}"))?;
+
+        // Rhythm mode would put percussion on channels 6-8 and make the
+        // melodic decode wrong. No shipped track uses it, but a silently
+        // wrong remaster is worse than none.
+        if crate::notes::uses_rhythm_mode(&events) {
+            eprintln!("cosmo-assets: {name} uses OPL rhythm mode; skipping remaster");
+            continue;
+        }
+        let notes = crate::notes::extract_notes(&events);
+        let voices = crate::lofi::assign_voices(&crate::notes::channel_median_pitch(&notes));
+        let loop_secs = crate::music::duration_ticks(&events) as f64 / crate::music::TICK_HZ;
+        let settings = crate::lofi::RenderSettings {
+            sample_rate: MUSIC_SAMPLE_RATE,
+            ..Default::default()
+        };
+        let pcm = crate::lofi::render(&notes, loop_secs, &voices, &settings);
+        write_wav_stereo(&pcm, MUSIC_SAMPLE_RATE, &remaster_dir.join(format!("{stem}.wav")))
+            .with_context(|| format!("rendering remastered track {name}"))?;
     }
 
     // --- PC speaker sound effects: three banks of 23, stitched into one

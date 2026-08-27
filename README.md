@@ -43,6 +43,14 @@ from source.
   looped WAV playback), matched to each level via the real per-level
   track assignment (packed into the level header's flags word), alongside
   the PC-speaker sound effects with the original's priority behaviour.
+- A second, re-voiced soundtrack, toggled with **F6** and on by default.
+  The IMF register stream is decoded back into *notes* — pitch, timing,
+  length and velocity are all recoverable from documented hardware
+  registers — and re-rendered with warm additive voices, tape wobble,
+  vinyl crackle and a low-pass. The composition is untouched; only the
+  instruments change. Deterministic and offline, so rebuilds are
+  byte-identical and the loop still joins seamlessly (release tails wrap
+  onto the start of the pass).
 - Collectibles use the original's own pickup table: score varies by item
   (200/400/800/1600/3200), stars and bombs feed their own counters, a
   hamburger widens the health meter and a power-up heals or pays out.

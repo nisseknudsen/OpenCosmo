@@ -69,6 +69,7 @@ fn main() {
         .init_resource::<flow::Stars>()
         .init_resource::<flow::Checkpoint>()
         .init_resource::<help::Paused>()
+        .init_resource::<audio::AudioMode>()
         .init_resource::<camera::Scroll>()
         .init_resource::<hints::NearHintGlobe>()
         .init_resource::<hints::SawAutoHintGlobe>()
@@ -98,6 +99,7 @@ fn main() {
                 // Sampled every frame, drained by the gameplay tick - see
                 // `input.rs` for why the 18.2Hz tick can't read keys itself.
                 input::sample_input,
+                audio::toggle_audio_mode,
             ),
         )
         // --- Gameplay ---
