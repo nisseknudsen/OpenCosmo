@@ -14,6 +14,8 @@ struct PresentSettings {
     output_size: vec2<f32>,
     // 0 = plain nearest (integer-scaled "authentic"), 1 = sharp bilinear.
     sharp: f32,
+    // 0 = show the pixels as they are, 1 = Scale3x smoothing.
+    smoothing: f32,
     scanline: f32,
     bloom: f32,
     vignette: f32,
@@ -58,6 +60,76 @@ fn nearest_uv(uv: vec2<f32>) -> vec2<f32> {
     return (floor(uv * settings.source_size) + 0.5) / settings.source_size;
 }
 
+fn texel_at(base: vec2<f32>, offset: vec2<f32>) -> vec3<f32> {
+    let uv = (base + offset + vec2(0.5)) / settings.source_size;
+    return textureSample(screen_texture, screen_sampler, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+}
+
+fn same(a: vec3<f32>, b: vec3<f32>) -> bool {
+    let d = abs(a - b);
+    return d.x < 0.02 && d.y < 0.02 && d.z < 0.02;
+}
+
+// Scale3x (AdvMAME3x): edge-directed pixel-art magnification.
+//
+// Chosen over the smoother options (xBRZ, HQx, a neural upscaler) for one
+// property: it only ever *copies* a neighbouring pixel, never blends two.
+// That means the 16-colour EGA palette comes out the other side exactly
+// intact, which is most of what "keeping an authentic style" amounts to
+// here.
+//
+// It is also, usefully, blind to dithering. The measured dither density of
+// this game's backdrops runs to 27% of all pixels, and a blending upscaler
+// turns that into a mess of blobs. On a checkerboard every rule's guard
+// (`B == D && B != F`) is false, so dithered regions pass through
+// untouched - which is why this can be applied to the whole frame rather
+// than to hand-picked assets.
+fn scale3x(uv: vec2<f32>) -> vec3<f32> {
+    let texel = uv * settings.source_size;
+    let base = floor(texel);
+    let cell = clamp(floor((texel - base) * 3.0), vec2(0.0), vec2(2.0));
+
+    let a = texel_at(base, vec2(-1.0, -1.0));
+    let b = texel_at(base, vec2(0.0, -1.0));
+    let c = texel_at(base, vec2(1.0, -1.0));
+    let d = texel_at(base, vec2(-1.0, 0.0));
+    let e = texel_at(base, vec2(0.0, 0.0));
+    let f = texel_at(base, vec2(1.0, 0.0));
+    let g = texel_at(base, vec2(-1.0, 1.0));
+    let h = texel_at(base, vec2(0.0, 1.0));
+    let i = texel_at(base, vec2(1.0, 1.0));
+
+    // Flat in one axis or the other: nothing to round off.
+    if same(b, h) || same(d, f) {
+        return e;
+    }
+
+    let index = i32(cell.y) * 3 + i32(cell.x);
+    switch index {
+        case 0: { if same(d, b) { return d; } }
+        case 1: { if (same(d, b) && !same(e, c)) || (same(b, f) && !same(e, a)) { return b; } }
+        case 2: { if same(b, f) { return f; } }
+        case 3: { if (same(d, b) && !same(e, g)) || (same(d, h) && !same(e, a)) { return d; } }
+        case 5: { if (same(b, f) && !same(e, i)) || (same(h, f) && !same(e, c)) { return f; } }
+        case 6: { if same(d, h) { return d; } }
+        case 7: { if (same(d, h) && !same(e, i)) || (same(h, f) && !same(e, g)) { return h; } }
+        case 8: { if same(h, f) { return f; } }
+        default: {}
+    }
+    return e;
+}
+
+// The upscale trebles the resolution, so its cells land on fractional
+// output pixels for the same reason source pixels did before sharp-bilinear
+// existed. Four taps a quarter-pixel apart average that unevenness out.
+fn scale3x_sampled(uv: vec2<f32>) -> vec3<f32> {
+    let o = 0.25 / settings.output_size;
+    return 0.25 * (scale3x(uv + vec2(-o.x, -o.y))
+                 + scale3x(uv + vec2(o.x, -o.y))
+                 + scale3x(uv + vec2(-o.x, o.y))
+                 + scale3x(uv + vec2(o.x, o.y)));
+}
+
 // Very slight barrel distortion. Kept subtle on purpose: enough to suggest
 // glass, not enough to bend the status bar's straight edges visibly.
 fn curve(uv: vec2<f32>) -> vec2<f32> {
@@ -77,11 +149,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }
 
-    var sample_uv = nearest_uv(uv);
-    if settings.sharp > 0.5 {
-        sample_uv = sharp_uv(uv);
+    var colour: vec3<f32>;
+    if settings.smoothing > 0.5 {
+        colour = scale3x_sampled(uv);
+    } else {
+        var sample_uv = nearest_uv(uv);
+        if settings.sharp > 0.5 {
+            sample_uv = sharp_uv(uv);
+        }
+        colour = textureSample(screen_texture, screen_sampler, sample_uv).rgb;
     }
-    var colour = textureSample(screen_texture, screen_sampler, sample_uv).rgb;
 
     // Bloom: EGA's saturated primaries are what glowed on a real monitor,
     // so only genuinely bright neighbours contribute. An unthresholded

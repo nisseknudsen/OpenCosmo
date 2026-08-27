@@ -6,6 +6,7 @@ pub mod lofi;
 pub mod music;
 pub mod notes;
 pub mod palette;
+pub mod scale3x;
 pub mod shell;
 pub mod sound;
 pub mod sprite;

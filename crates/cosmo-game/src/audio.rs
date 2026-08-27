@@ -20,10 +20,14 @@ pub enum AudioMode {
 }
 
 impl AudioMode {
+    /// Authentic by default. The re-voiced mix is kept and still reachable
+    /// with F6 or `COSMO_AUDIO=remaster`, but it is not what you get on
+    /// launch - it was judged not good enough to be the default, and the
+    /// approach is being reconsidered.
     pub fn from_env() -> Self {
         match std::env::var("COSMO_AUDIO").as_deref() {
-            Ok("authentic") => AudioMode::Authentic,
-            _ => AudioMode::Remaster,
+            Ok("remaster") => AudioMode::Remaster,
+            _ => AudioMode::Authentic,
         }
     }
 

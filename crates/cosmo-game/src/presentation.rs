@@ -46,6 +46,41 @@ pub const BAR_H: u32 = 48;
 /// it and it draws nothing else.
 pub const PRESENT_LAYER: usize = 2;
 
+/// Whether the pixel art is magnified as-is or smoothed with Scale3x.
+///
+/// Separate from `PresentationMode` because it is a different question:
+/// that one is about how the picture reaches the window, this one is about
+/// whether the artwork's own edges get rounded. Plenty of people want a
+/// crisp, scaled picture *and* untouched pixels.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArtMode {
+    /// Show the pixels exactly as drawn.
+    Pixels,
+    /// Round staircased edges with Scale3x.
+    Smoothed,
+}
+
+impl ArtMode {
+    pub fn from_env() -> Self {
+        match std::env::var("COSMO_ART").as_deref() {
+            Ok("smoothed") => ArtMode::Smoothed,
+            _ => ArtMode::Pixels,
+        }
+    }
+    pub fn toggled(self) -> Self {
+        match self {
+            ArtMode::Pixels => ArtMode::Smoothed,
+            ArtMode::Smoothed => ArtMode::Pixels,
+        }
+    }
+}
+
+impl Default for ArtMode {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PresentationMode {
     /// Integer scaling, letterboxed, no filtering or effects - what the
@@ -77,6 +112,7 @@ impl PresentationMode {
                 source_size: Vec2::new(SCREEN_W as f32, SCREEN_H as f32),
                 output_size: Vec2::new(SCREEN_W as f32, SCREEN_H as f32),
                 sharp: 0.0,
+                smoothing: 0.0,
                 scanline: 0.0,
                 bloom: 0.0,
                 vignette: 0.0,
@@ -87,6 +123,7 @@ impl PresentationMode {
                 source_size: Vec2::new(SCREEN_W as f32, SCREEN_H as f32),
                 output_size: Vec2::new(SCREEN_W as f32, SCREEN_H as f32),
                 sharp: 1.0,
+                smoothing: 0.0,
                 // Deliberately mild. A heavy treatment reads as a filter
                 // sitting on top of the game; the point is to make the art
                 // look intentional, not costumed.
@@ -127,6 +164,7 @@ pub struct PresentSettings {
     pub source_size: Vec2,
     pub output_size: Vec2,
     pub sharp: f32,
+    pub smoothing: f32,
     pub scanline: f32,
     pub bloom: f32,
     pub vignette: f32,
@@ -157,7 +195,8 @@ pub struct PresentationPlugin;
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(Material2dPlugin::<PresentMaterial>::default())
-            .add_systems(Update, (toggle_mode, fit_present_quad).chain());
+            .init_resource::<ArtMode>()
+            .add_systems(Update, (toggle_mode, toggle_art, fit_present_quad).chain());
     }
 }
 
@@ -237,11 +276,20 @@ fn toggle_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<PresentationMod
     }
 }
 
+/// F7 flips the artwork between untouched pixels and Scale3x smoothing.
+fn toggle_art(keys: Res<ButtonInput<KeyCode>>, mut art: ResMut<ArtMode>) {
+    if keys.just_pressed(KeyCode::F7) {
+        *art = art.toggled();
+        info!("art: {:?}", *art);
+    }
+}
+
 /// Sizes the present quad to the window and keeps the shader's idea of the
 /// output size in step with it.
 fn fit_present_quad(
     windows: Query<&Window>,
     mode: Res<PresentationMode>,
+    art: Res<ArtMode>,
     mut materials: ResMut<Assets<PresentMaterial>>,
     mut quad: Query<(&mut Transform, &MeshMaterial2d<PresentMaterial>), With<PresentQuad>>,
 ) {
@@ -273,6 +321,7 @@ fn fit_present_quad(
         // logical pixels on a HiDPI display made the ramp `scale_factor`
         // times too wide, which is simply blur.
         settings.output_size = Vec2::new(SCREEN_W as f32 * scale, SCREEN_H as f32 * scale);
+        settings.smoothing = if *art == ArtMode::Smoothed { 1.0 } else { 0.0 };
         material.settings = settings;
     }
 }

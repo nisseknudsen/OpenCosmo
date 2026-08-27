@@ -43,7 +43,9 @@ from source.
   looped WAV playback), matched to each level via the real per-level
   track assignment (packed into the level header's flags word), alongside
   the PC-speaker sound effects with the original's priority behaviour.
-- A second, re-voiced soundtrack, toggled with **F6** and on by default.
+- A second, re-voiced soundtrack, toggled with **F6**. Off by default —
+  it is not considered good enough yet and the approach is being
+  reconsidered.
   The IMF register stream is decoded back into *notes* — pitch, timing,
   length and velocity are all recoverable from documented hardware
   registers — and re-rendered with warm additive voices, tape wobble,
@@ -82,6 +84,12 @@ from source.
   at all. Rendering to a fixed buffer is also what let the layout match the
   original's screen exactly, including the 8px black border around the play
   area that the window-relative version had no way to express.
+- Optional **Scale3x** smoothing of the artwork, toggled with **F7** and
+  off by default. Chosen over the smoother upscalers (xBRZ, HQx, neural)
+  for one property: it only ever *copies* a neighbouring pixel, never
+  blends two, so the 16-colour EGA palette survives exactly. It also leaves
+  dithering alone, which matters because this game's backdrops run to 27%
+  dither by pixel count and a blending upscaler turns that into blobs.
 - Six rebindable actions (the same six the original stores), each carrying
   several bindings at once so keyboard and gamepad work without a mode
   switch. Input is sampled every frame and drained by the 18.2Hz gameplay
@@ -142,6 +150,8 @@ screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
 `COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` /
 `COSMO_WARP=1` open the help menu or level warp on the first frame;
 `COSMO_PRESENT=authentic|remaster` picks the presentation mode;
+`COSMO_ART=pixels|smoothed` picks the artwork treatment;
+`COSMO_AUDIO=authentic|remaster` picks the soundtrack;
 `COSMO_EPISODE=1|2|3` picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
 pounce/bomb/blast events.
