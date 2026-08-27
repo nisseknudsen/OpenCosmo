@@ -75,7 +75,19 @@ pub fn trace_tick(
 /// `COSMO_SHOT_AT` (default 30 - late enough for assets to have loaded).
 /// Going through the engine rather than an external screen grab keeps the
 /// capture deterministic and off whatever display the user is looking at.
-pub fn screenshot_at(mut commands: Commands, mut ticks: Local<u32>, mut taken: Local<bool>) {
+///
+/// `COSMO_SHOT_RAW=1` captures the 320x200 virtual screen instead of the
+/// window. That is the one that can answer pixel-alignment questions: the
+/// window shot has been through the present shader and the display's scale
+/// factor, so "is this UI element on an exact pixel" is unanswerable from
+/// it, while the raw buffer is the game's own framebuffer.
+pub fn screenshot_at(
+    mut commands: Commands,
+    screen: Res<crate::presentation::VirtualScreen>,
+    mut ticks: Local<u32>,
+    mut taken: Local<bool>,
+) {
+    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
     let Ok(path) = std::env::var("COSMO_SHOT") else {
         return;
     };
@@ -88,9 +100,12 @@ pub fn screenshot_at(mut commands: Commands, mut ticks: Local<u32>, mut taken: L
         return;
     }
     *taken = true;
-    commands
-        .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
-        .observe(bevy::render::view::screenshot::save_to_disk(path));
+    let shot = if std::env::var("COSMO_SHOT_RAW").is_ok() {
+        Screenshot::image(screen.0.clone())
+    } else {
+        Screenshot::primary_window()
+    };
+    commands.spawn(shot).observe(save_to_disk(path));
 }
 
 /// `COSMO_QUIT_AFTER=<ticks>` ends the run on its own, so a verification

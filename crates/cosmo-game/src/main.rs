@@ -15,6 +15,7 @@ mod level;
 mod panel;
 mod pickups;
 mod player;
+mod presentation;
 mod screen;
 mod sfx;
 mod tileset;
@@ -47,6 +48,7 @@ fn main() {
                     ..default()
                 }),
         )
+        .add_plugins(presentation::PresentationPlugin)
         .insert_resource(Time::<Fixed>::from_hz(18.2))
         // COSMO_STATE lets a dev (or a headless screenshot run) jump
         // straight to a screen instead of clicking through the title.
@@ -159,7 +161,6 @@ fn main() {
                 camera::apply_scroll,
                 level::scroll_backdrop,
                 hud::update_status_bar,
-                hud::fit_camera_to_play_area,
                 audio::update_music,
             )
                 .chain()
@@ -202,6 +203,7 @@ fn main() {
 fn insert_core_resources(app: &mut App) {
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     app.insert_resource(GameData::load(&assets_dir));
+    presentation::insert_virtual_screen(app);
 
     let font_image = app
         .world()
@@ -222,7 +224,8 @@ fn insert_core_resources(app: &mut App) {
         font_layout,
     });
 
-    let ui_camera = hud::spawn_ui_camera_on(app.world_mut());
+    let target = app.world().resource::<presentation::VirtualScreen>().target();
+    let ui_camera = hud::spawn_ui_camera_on(app.world_mut(), target);
     app.insert_resource(UiCamera(ui_camera));
 }
 
@@ -236,6 +239,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    screen: Res<presentation::VirtualScreen>,
 ) {
     // Each episode names its levels differently, so the default start
     // comes from that episode's own progression rather than a literal.
@@ -310,7 +314,7 @@ fn setup_game(
         ui_camera.0,
     );
 
-    camera::spawn_camera(&mut commands);
+    camera::spawn_camera(&mut commands, &screen);
 }
 
 fn teardown_game(

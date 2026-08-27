@@ -91,12 +91,13 @@ pub(crate) fn spawn_text(
 /// globally-inserted camera resource here would be a startup race. Owning
 /// the camera also means it can clear to black - during these screens there
 /// is no game camera underneath to preserve.
-fn spawn_screen_camera(commands: &mut Commands) -> Entity {
+fn spawn_screen_camera(commands: &mut Commands, screen: &crate::presentation::VirtualScreen) -> Entity {
     commands
         .spawn((
             ScreenUi,
             Camera2d,
             Camera {
+                target: screen.target(),
                 order: 1,
                 ..default()
             },
@@ -134,8 +135,13 @@ pub(crate) fn screen_panel() -> Node {
     }
 }
 
-fn spawn_fullscreen_image(commands: &mut Commands, asset_server: &AssetServer, path: &str) {
-    let camera = spawn_screen_camera(commands);
+fn spawn_fullscreen_image(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    screen: &crate::presentation::VirtualScreen,
+    path: &str,
+) {
+    let camera = spawn_screen_camera(commands, screen);
     commands
         .spawn(screen_root(camera))
         .with_children(|root| {
@@ -143,12 +149,22 @@ fn spawn_fullscreen_image(commands: &mut Commands, asset_server: &AssetServer, p
         });
 }
 
-pub fn spawn_title(mut commands: Commands, asset_server: Res<AssetServer>) {
-    spawn_fullscreen_image(&mut commands, &asset_server, &crate::data::asset_path("screens/title.png"));
+pub fn spawn_title(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    screen: Res<crate::presentation::VirtualScreen>,
+) {
+    let path = crate::data::asset_path("screens/title.png");
+    spawn_fullscreen_image(&mut commands, &asset_server, &screen, &path);
 }
 
-pub fn spawn_credits(mut commands: Commands, asset_server: Res<AssetServer>) {
-    spawn_fullscreen_image(&mut commands, &asset_server, &crate::data::asset_path("screens/credit.png"));
+pub fn spawn_credits(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    screen: Res<crate::presentation::VirtualScreen>,
+) {
+    let path = crate::data::asset_path("screens/credit.png");
+    spawn_fullscreen_image(&mut commands, &asset_server, &screen, &path);
 }
 
 /// Any key returns to the menu.
@@ -185,8 +201,9 @@ pub fn spawn_menu(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     hud: Res<HudAssets>,
+    screen: Res<crate::presentation::VirtualScreen>,
 ) {
-    let camera = spawn_screen_camera(&mut commands);
+    let camera = spawn_screen_camera(&mut commands, &screen);
     commands
         .spawn(screen_root(camera))
         .with_children(|root| {

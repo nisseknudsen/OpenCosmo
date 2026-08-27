@@ -48,11 +48,10 @@ const BOMBS_DIGITS: usize = 2;
 /// ("Why 8 if there are only 5 health cell spaces?" - game2.c:1320).
 const HEALTH_CELLS: usize = 5;
 
-/// Fraction of the window the play area occupies. The original screen is
-/// 200px tall: a 152px game window (rows 0..18) above a 48px status bar
-/// (rows 19..24). Keeping that split means the bar sits *below* the action
-/// rather than covering it.
-pub const GAME_VIEW_FRACTION: f32 = 152.0 / 200.0;
+/// A pixel offset within the virtual screen, as a percentage of it.
+fn pct(px: u32, of: u32) -> f32 {
+    px as f32 / of as f32 * 100.0
+}
 
 /// Keeps the HUD camera from also redrawing the world's sprites.
 pub const HUD_RENDER_LAYER: usize = 1;
@@ -105,11 +104,14 @@ fn atlas_image(hud: &HudAssets, index: usize) -> ImageNode {
 /// squeezed into that same clipped strip. This one covers the whole window,
 /// draws after the game camera (order 1) without clearing it, and sits on
 /// its own render layer so it doesn't redraw every world sprite on top.
-pub fn spawn_ui_camera_on(world: &mut World) -> Entity {
+pub fn spawn_ui_camera_on(world: &mut World, target: bevy::render::camera::RenderTarget) -> Entity {
     world
         .spawn((
             Camera2d,
             Camera {
+                // Over the whole virtual screen, including the border, so
+                // UI tile coordinates are the original's screen coordinates.
+                target,
                 order: 1,
                 clear_color: bevy::render::camera::ClearColorConfig::None,
                 ..default()
@@ -131,12 +133,15 @@ pub fn spawn_hud(
     commands
         .spawn((
             StatusBarUi,
+            // Exactly where `DrawStaticGameScreen` puts it (game2.c:3596):
+            // screen tiles x 1..38, y 19..24. The UI camera covers the whole
+            // 320x200 virtual screen, so these percentages are exact.
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(0.0),
-                left: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent((1.0 - GAME_VIEW_FRACTION) * 100.0),
+                left: Val::Percent(pct(crate::presentation::BAR_X, crate::presentation::SCREEN_W)),
+                top: Val::Percent(pct(crate::presentation::BAR_Y, crate::presentation::SCREEN_H)),
+                width: Val::Percent(pct(crate::presentation::BAR_W, crate::presentation::SCREEN_W)),
+                height: Val::Percent(pct(crate::presentation::BAR_H, crate::presentation::SCREEN_H)),
                 ..default()
             },
             UiTargetCamera(ui_camera),
@@ -256,34 +261,3 @@ pub fn update_status_bar(
     }
 }
 
-/// Confines the 3D/2D camera to the play area so the status bar occupies
-/// its own strip at the bottom instead of overlapping the action.
-pub fn fit_camera_to_play_area(
-    windows: Query<&Window>,
-    mut cameras: Query<&mut Camera, With<crate::camera::GameCamera>>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Ok(mut camera) = cameras.single_mut() else {
-        return;
-    };
-    let size = window.physical_size();
-    if size.x == 0 || size.y == 0 {
-        return;
-    }
-    let play_height = (size.y as f32 * GAME_VIEW_FRACTION).round() as u32;
-    let physical_size = UVec2::new(size.x, play_height.max(1));
-    // Viewport has no PartialEq, so compare the fields we actually set.
-    let unchanged = camera
-        .viewport
-        .as_ref()
-        .is_some_and(|v| v.physical_size == physical_size && v.physical_position == UVec2::ZERO);
-    if !unchanged {
-        camera.viewport = Some(bevy::render::camera::Viewport {
-            physical_position: UVec2::ZERO,
-            physical_size,
-            ..default()
-        });
-    }
-}

@@ -65,6 +65,15 @@ from source.
   Alt, and detonate into a real 6x6-tile blast that damages enemies and
   the player alike — and reaches things a pounce can't, like the roamer
   slug.
+- Everything is drawn into one 320x200 offscreen buffer at the original's
+  exact resolution, and that buffer is scaled to the window exactly once.
+  Two presentation modes, toggled with **F5**: *remaster* (the default)
+  fills the window with sharp-bilinear scaling plus a restrained CRT pass —
+  scanlines, brightness-thresholded bloom, a slight vignette — and
+  *authentic* uses whole-number scaling with letterboxing and no filtering
+  at all. Rendering to a fixed buffer is also what let the layout match the
+  original's screen exactly, including the 8px black border around the play
+  area that the window-relative version had no way to express.
 - F1 opens the help menu (restart, level warp, quit). The original also
   offers Save/Restore/Help/Game-redefine/High-scores, which depend on
   unported subsystems, so only working entries are listed. "L)evel Warp"
@@ -111,6 +120,7 @@ rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
 screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
 `COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` /
 `COSMO_WARP=1` open the help menu or level warp on the first frame;
+`COSMO_PRESENT=authentic|remaster` picks the presentation mode;
 `COSMO_EPISODE=1|2|3` picks the episode; `COSMO_AUTOPLAY=1` drives
 the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
 pounce/bomb/blast events.
@@ -121,7 +131,10 @@ comma-separated `<keys><ticks>` steps — keys being `w`/`e` (west/east),
 frame), `.` (nothing). `COSMO_TRACE=<n>` prints player position, facing,
 frame, scroll, cling and live enemy count every nth tick;
 `COSMO_SHOT=<path>` grabs the window once (at `COSMO_SHOT_AT`, default
-tick 30) and `COSMO_QUIT_AFTER=<ticks>` ends the run. So, for example,
+tick 30), `COSMO_SHOT_RAW=1` grabs the 320x200 virtual screen instead —
+the one to use for pixel-alignment questions, since it hasn't been through
+the present shader or the display's scale factor — and
+`COSMO_QUIT_AFTER=<ticks>` ends the run. So, for example,
 checking that looking up and down actually pans the view:
 
 ```sh

@@ -99,21 +99,33 @@ impl Scroll {
 #[derive(Component)]
 pub struct GameCamera;
 
-pub fn spawn_camera(commands: &mut Commands) {
+pub fn spawn_camera(commands: &mut Commands, screen: &crate::presentation::VirtualScreen) {
+    use crate::presentation as present;
     commands.spawn((
         Camera2d,
+        Camera {
+            // Draws into the virtual screen, at the play area's exact
+            // position within it: tiles (1,1)..(38,18) per `DrawMapRegion`
+            // (game1.c:885-901), leaving the original's 8px border.
+            target: screen.target(),
+            viewport: Some(bevy::render::camera::Viewport {
+                physical_position: UVec2::new(present::PLAY_X, present::PLAY_Y),
+                physical_size: UVec2::new(present::PLAY_W, present::PLAY_H),
+                ..default()
+            }),
+            order: 0,
+            ..default()
+        },
         Projection::Orthographic(OrthographicProjection {
-            // Locks the visible area to a classic EGA-screen-ish extent
-            // regardless of window size/DPI; Bevy letterboxes to fit.
-            // Exactly the original's game window: SCROLLW x SCROLLH =
-            // 38x18 tiles (def.h:138-139) = 304x144 px. Matching this
-            // matters beyond framing - the backdrop images are 40x18
-            // tiles (320x144) and are meant to fill this window exactly,
-            // so a mismatched viewport height puts the horizon at the
-            // wrong place.
-            scaling_mode: ScalingMode::AutoMin {
-                min_width: 304.0,
-                min_height: 144.0,
+            // One world unit per source pixel, no scaling whatsoever - the
+            // only scaling in the whole game happens once, in the present
+            // shader. SCROLLW x SCROLLH = 38x18 tiles (def.h:138-139) =
+            // 304x144 px. Matching this exactly matters beyond framing: the
+            // backdrops are drawn to fill this window, so a mismatched
+            // height puts the horizon in the wrong place.
+            scaling_mode: ScalingMode::Fixed {
+                width: present::PLAY_W as f32,
+                height: present::PLAY_H as f32,
             },
             ..OrthographicProjection::default_2d()
         }),
@@ -123,21 +135,14 @@ pub fn spawn_camera(commands: &mut Commands) {
 
 /// Places the camera at whatever the tick decided the scroll should be.
 /// Pure presentation - all the movement logic lives in `Scroll`.
-pub fn apply_scroll(
-    scroll: Res<Scroll>,
-    mut cam_q: Query<(&mut Transform, &Projection), With<GameCamera>>,
-) {
-    let Ok((mut cam_t, projection)) = cam_q.single_mut() else {
+pub fn apply_scroll(scroll: Res<Scroll>, mut cam_q: Query<&mut Transform, With<GameCamera>>) {
+    let Ok(mut cam_t) = cam_q.single_mut() else {
         return;
     };
-    // The offset must come from the *actual* rendered viewport rather than
-    // a guessed constant - a mismatch either leaves dead space or lets the
-    // view stop short, truncating the ground out of frame.
-    let Projection::Orthographic(ortho) = projection else {
-        return;
-    };
-    cam_t.translation.x = scroll.x as f32 * TILE_PX + ortho.area.width() / 2.0;
-    cam_t.translation.y = -(scroll.y as f32 * TILE_PX) - ortho.area.height() / 2.0;
+    // The viewport is a fixed 304x144 now, so the half-extent is a constant
+    // rather than something to read back off the projection.
+    cam_t.translation.x = scroll.x as f32 * TILE_PX + crate::presentation::PLAY_W as f32 / 2.0;
+    cam_t.translation.y = -(scroll.y as f32 * TILE_PX) - crate::presentation::PLAY_H as f32 / 2.0;
 }
 
 #[cfg(test)]
