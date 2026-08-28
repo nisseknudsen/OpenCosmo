@@ -70,6 +70,11 @@ from source.
   the exit in most levels, and its tick function does nothing — the level
   ends from the sprite-keyed interaction switch instead, on the sign coming
   into view.
+- Tiles flagged `TILE_IN_FRONT` draw over the player and actors, which is
+  the game's own foreground layer — it is why Cosmo sinks behind a slope's
+  leading edge instead of walking on top of it. 57% of drawn tiles carry
+  the flag; mostly solid terrain, but 2.1% are pure decoration in front of
+  the action.
 - Actors honour the four flags their `ConstructActor` call carries —
   force-active, stay-active, weighted, acrophile — extracted from the
   source into a table. Between them these define a mechanic: a prize that

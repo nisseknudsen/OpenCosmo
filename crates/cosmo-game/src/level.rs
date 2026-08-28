@@ -61,11 +61,15 @@ pub fn tile_topleft_to_center(x: f32, y: f32, width_px: f32, height_px: f32) -> 
     tile_to_world(x, y) + Vec2::new(width_px / 2.0, -height_px / 2.0)
 }
 
+/// Z of a tile the map says draws in front of everything. Above the
+/// player (10) and every actor (5..8).
+const FOREGROUND_Z: f32 = 12.0;
+
 pub fn spawn_level_tiles(
     commands: &mut Commands,
     tileset: &TilesetAssets,
     level: &LevelJson,
-    _data: &GameData,
+    data: &GameData,
 ) {
     for y in 0..level.height {
         for x in 0..level.width {
@@ -78,6 +82,22 @@ pub fn spawn_level_tiles(
                 continue;
             }
             let pos = tile_topleft_to_center(x as f32, y as f32, TILE_PX, TILE_PX);
+            // `TILE_IN_FRONT` (game1.c:252). `DrawSprite` skips any 8x8
+            // chunk of a sprite whose destination map cell has this set
+            // (game1.c:1250-1254), so flagged tiles hide whatever is behind
+            // them - the game's own foreground layer, and the reason Cosmo
+            // disappears behind foliage rather than walking over it.
+            //
+            // Reproduced by drawing those tiles *over* the sprites instead
+            // of masking the sprites, which is equivalent wherever the tile
+            // is opaque - 97.5% of them. For the masked 2.5% the sprite
+            // shows through the tile's gaps here, where the original hides
+            // it in that whole cell.
+            let z = if data.tile_attr(raw) & crate::data::TILE_ATTR_IN_FRONT != 0 {
+                FOREGROUND_Z
+            } else {
+                0.0
+            };
             let (image, layout, index) = if raw >= MASKED_TILE_THRESHOLD {
                 // Masked tiles are addressed as a direct byte offset into
                 // MASKTILE.MNI (40 bytes/tile), not the tile_index*8
@@ -95,7 +115,7 @@ pub fn spawn_level_tiles(
                     texture_atlas: Some(TextureAtlas { layout, index }),
                     ..default()
                 },
-                Transform::from_translation(pos.extend(0.0)),
+                Transform::from_translation(pos.extend(z)),
                 TileMarker,
                 LevelScoped,
             ));
