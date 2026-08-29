@@ -223,6 +223,7 @@ fn main() {
                 effects::tick_explosions,
                 combat::explosion_damage,
                 combat::explosion_bursts_containers,
+                actors::collapse_pedestals,
                 effects::tick_decorations,
                 effects::tick_score_effects,
             )

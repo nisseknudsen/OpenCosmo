@@ -55,6 +55,7 @@ pub fn trace_tick(
     player_q: Query<&Player>,
     enemies: Query<&Enemy>,
     containers: Query<&crate::actors::Container>,
+    pedestals: Query<&crate::actors::Pedestal>,
     scroll: Res<Scroll>,
     near_globe: Res<crate::hints::NearHintGlobe>,
     paused: Res<crate::help::Paused>,
@@ -85,7 +86,7 @@ pub fn trace_tick(
     println!(
         "t={t} pos=({x},{y}) face={face} frame={frame} scroll=({sx},{sy}) \
          rel_row={rel} fall={fall}/{ft} jump={jt} cling={cling}{slip} \
-         health={hp} dead={dead} enemies={alive} barrels={barrels} globe={globe} paused={paused} \
+         health={hp} dead={dead} enemies={alive} barrels={barrels} peds={peds} globe={globe} paused={paused} \
          stars={stars} score={score}",
         t = *tick,
         x = p.x,
@@ -111,6 +112,7 @@ pub fn trace_tick(
         dead = p.dead_timer,
         alive = alive,
         barrels = containers.iter().count(),
+        peds = pedestals.iter().map(|p| p.height).sum::<i32>(),
         globe = near_globe
             .0
             .map(|h| h.to_string())

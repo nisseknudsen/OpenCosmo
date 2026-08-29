@@ -31,6 +31,7 @@ pub mod snd {
     pub const PLAYER_POUNCE: u16 = 6;
     pub const PLAYER_DEATH: u16 = 7;
     pub const EXPLOSION: u16 = 10;
+    pub const WIN_LEVEL: u16 = 11;
     pub const BARREL_DESTROY_1: u16 = 12;
     pub const PRIZE: u16 = 13;
     pub const PLAYER_HURT: u16 = 14;

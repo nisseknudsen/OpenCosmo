@@ -280,7 +280,7 @@ pub fn rects_overlap(
 /// the bomb - a symmetric radius around that origin would sit too low and
 /// too small, and miss things standing right next to the bomb.
 /// The blast's footprint in tiles, from the explosion sprite itself.
-fn blast_size(effects: &EffectAssets) -> (i32, i32) {
+pub fn blast_size(effects: &EffectAssets) -> (i32, i32) {
     effects
         .get(effects::SPR_EXPLOSION)
         .map(|s| {

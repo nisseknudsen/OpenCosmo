@@ -113,6 +113,23 @@ pub fn apply_pedestal_platforms(level: &mut LevelJson) {
     }
 }
 
+/// A standing pedestal, so it can be knocked down.
+///
+/// It is inert until something explodes against its base, and then it
+/// sinks a tile at a time, shedding a shard each step, until it collapses
+/// entirely (game1.c:5281-5303). That is the only thing it ever does, and
+/// leaving it out made a pillar you could climb but never destroy.
+#[derive(Component)]
+pub struct Pedestal {
+    pub x: i32,
+    pub base_y: i32,
+    pub height: i32,
+    /// Counts 3, 2, 1 between steps, as `data2` does.
+    pub collapse: u32,
+    pub stalk: Vec<Entity>,
+    pub cap: Entity,
+}
+
 /// A pedestal: a stalk `height` tiles tall with a five-wide cap on top.
 ///
 /// The actor itself is never drawn (`nextDrawMode = DRAW_MODE_HIDDEN`,
@@ -144,16 +161,21 @@ fn spawn_pedestal(
     };
     let (cap, stalk) = (load(0), load(1));
 
+    let mut segments = Vec::with_capacity(height as usize);
     for i in 0..height {
         let pos = tile_topleft_to_center(x as f32, (y - i) as f32, 8.0, 8.0);
-        commands.spawn((
-            Sprite {
-                image: stalk.clone(),
-                ..default()
-            },
-            Transform::from_translation(pos.extend(4.0)),
-            LevelScoped,
-        ));
+        segments.push(
+            commands
+                .spawn((
+                    Sprite {
+                        image: stalk.clone(),
+                        ..default()
+                    },
+                    Transform::from_translation(pos.extend(4.0)),
+                    LevelScoped,
+                ))
+                .id(),
+        );
     }
     let cap_meta = &manifest.frames[0];
     let pos = tile_topleft_to_center(
@@ -162,14 +184,97 @@ fn spawn_pedestal(
         cap_meta.width_px as f32,
         cap_meta.height_px as f32,
     );
+    let cap_entity = commands
+        .spawn((
+            Sprite {
+                image: cap,
+                ..default()
+            },
+            Transform::from_translation(pos.extend(4.0)),
+            LevelScoped,
+        ))
+        .id();
     commands.spawn((
-        Sprite {
-            image: cap,
-            ..default()
+        Pedestal {
+            x,
+            base_y: y,
+            height,
+            collapse: 0,
+            stalk: segments,
+            cap: cap_entity,
         },
-        Transform::from_translation(pos.extend(4.0)),
         LevelScoped,
     ));
+}
+
+/// Writes a pedestal's cap row into the map, or clears it.
+fn set_cap_tiles(level: &mut LevelJson, x: i32, row: i32, value: u16) {
+    if row < 0 || row >= level.height as i32 {
+        return;
+    }
+    for i in 0..5 {
+        let cx = x - 2 + i;
+        if cx < 0 || cx >= level.width as i32 {
+            continue;
+        }
+        let idx = row as usize * level.width + cx as usize;
+        if let Some(cell) = level.tiles.get_mut(idx) {
+            *cell = value;
+        }
+    }
+}
+
+/// `ActPedestal`'s collapse (game1.c:5281-5303): a blast against the base
+/// starts it sinking, one tile every three ticks, until nothing is left.
+pub fn collapse_pedestals(
+    mut commands: Commands,
+    mut level: ResMut<crate::level::CurrentLevel>,
+    effects: Res<crate::effects::EffectAssets>,
+    explosions: Query<&crate::effects::Explosion>,
+    mut pedestals: Query<(Entity, &mut Pedestal)>,
+) {
+    let (blast_w, blast_h) = crate::combat::blast_size(&effects);
+    for (entity, mut ped) in &mut pedestals {
+        if ped.collapse == 0 {
+            let hit = explosions.iter().any(|e| {
+                crate::combat::rects_overlap(
+                    e.x, e.y, blast_w, blast_h, ped.x, ped.base_y, 1, 1,
+                )
+            });
+            if hit {
+                ped.collapse = 3;
+            }
+            continue;
+        }
+        if ped.collapse > 1 {
+            ped.collapse -= 1;
+            continue;
+        }
+        // A step down: lose the top segment, drop the cap onto it.
+        ped.collapse = 3;
+        let old_cap_row = ped.base_y - ped.height;
+        set_cap_tiles(&mut level.level, ped.x, old_cap_row, 0);
+        if let Some(top) = ped.stalk.pop() {
+            commands.entity(top).try_despawn();
+        }
+        ped.height -= 1;
+        crate::effects::spawn_pounce_debris(&mut commands, &effects, ped.x, ped.base_y);
+
+        if ped.height <= 1 {
+            commands.entity(ped.cap).try_despawn();
+            for e in ped.stalk.drain(..) {
+                commands.entity(e).try_despawn();
+            }
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        let row = ped.base_y - ped.height;
+        set_cap_tiles(&mut level.level, ped.x, row, TILE_INVISIBLE_PLATFORM);
+        if let Ok(mut t) = commands.get_entity(ped.cap) {
+            let pos = tile_topleft_to_center((ped.x - 2) as f32, row as f32, 40.0, 8.0);
+            t.insert(Transform::from_translation(pos.extend(4.0)));
+        }
+    }
 }
 const SPR_EYE_PLANT: u16 = 95;
 

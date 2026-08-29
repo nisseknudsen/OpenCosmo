@@ -363,6 +363,7 @@ pub fn check_level_exit(
     stars: Res<Stars>,
     mut sequence: ResMut<LevelSequence>,
     mut finished: EventWriter<LevelFinished>,
+    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -382,6 +383,10 @@ pub fn check_level_exit(
             && s.y < scroll.y + crate::camera::SCROLL_H
     });
     if touching || sign_in_view {
+        // `StartSound(SND_WIN_LEVEL)` fires on every level win
+        // (game1.c:10171), intermission or not - which is the only
+        // acknowledgement you get for the levels that have no frame.
+        sfx.write(PlaySfx(snd::WIN_LEVEL));
         let intermission = sequence.advance(stars.0);
         finished.write(LevelFinished {
             level: sequence.current().to_string(),
@@ -407,7 +412,6 @@ pub fn show_intermission(
     hud: Res<crate::hud::HudAssets>,
     ui_camera: Res<crate::screen::UiCamera>,
     mut enter: EventWriter<EnterLevel>,
-    mut sfx: EventWriter<PlaySfx>,
 ) {
     let Some(event) = events.read().last() else {
         return;
@@ -419,7 +423,6 @@ pub fn show_intermission(
         });
         return;
     };
-    sfx.write(PlaySfx(snd::BIG_PRIZE));
     pending.0 = Some(event.level.clone());
     paused.0 = true;
     crate::panel::TextFrame::new(7, 7, 34, intermission.title(), "Press ANY key.")
