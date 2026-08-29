@@ -15,9 +15,9 @@ fn main() -> Result<()> {
     );
     std::fs::create_dir_all(&out_dir)?;
 
-    let mut zip = cosmo_assets::shell::open_installer_zip(&sh_path)?;
-    let vol_bytes = cosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.VOL")?;
-    let entries = cosmo_assets::vol::parse(&vol_bytes)?;
+    let mut zip = opencosmo_assets::shell::open_installer_zip(&sh_path)?;
+    let vol_bytes = opencosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.VOL")?;
+    let entries = opencosmo_assets::vol::parse(&vol_bytes)?;
     let data = entries
         .iter()
         .find(|e| e.name.eq_ignore_ascii_case(&track))
@@ -25,27 +25,27 @@ fn main() -> Result<()> {
         .data;
 
     println!("{track}: {} raw bytes", data.len());
-    let events = cosmo_assets::music::parse_imf(data)?;
+    let events = opencosmo_assets::music::parse_imf(data)?;
     println!("{} IMF events", events.len());
 
-    let ticks = cosmo_assets::music::duration_ticks(&events);
-    let secs = ticks as f64 / cosmo_assets::music::TICK_HZ;
+    let ticks = opencosmo_assets::music::duration_ticks(&events);
+    let secs = ticks as f64 / opencosmo_assets::music::TICK_HZ;
     println!(
         "duration: {ticks} ticks @ {}Hz = {:.2}s",
-        cosmo_assets::music::TICK_HZ,
+        opencosmo_assets::music::TICK_HZ,
         secs
     );
 
     let sample_rate = 44100u32;
     let start = std::time::Instant::now();
-    let pcm = cosmo_assets::music::render_to_pcm(&events, sample_rate);
+    let pcm = opencosmo_assets::music::render_to_pcm(&events, sample_rate);
     println!("rendered {} stereo samples in {:?}", pcm.len() / 2, start.elapsed());
 
     let wav_secs = (pcm.len() / 2) as f64 / sample_rate as f64;
     println!("rendered WAV duration: {wav_secs:.2}s (vs {secs:.2}s predicted from ticks)");
 
     let out_path = out_dir.join(format!("{}.wav", track.trim_end_matches(".MNI").to_ascii_lowercase()));
-    cosmo_assets::music::render_to_wav(&events, sample_rate, &out_path)?;
+    opencosmo_assets::music::render_to_wav(&events, sample_rate, &out_path)?;
     println!("wrote {}", out_path.display());
 
     // --- Structural validation ---

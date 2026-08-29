@@ -496,8 +496,8 @@ pub fn spawn_level_actors(
         // ACT_* (map actor type) and SPR_* (the graphic actually drawn)
         // are different numbering spaces - see actor_sprite_map.rs. Sprite
         // folders on disk are keyed by SPR id, produced the same way by
-        // cosmo-assets::convert::convert_episode1.
-        let sprite_type = cosmo_assets::actor_sprite_map::ACT_TO_SPRITE
+        // opencosmo-assets::convert::convert_episode1.
+        let sprite_type = opencosmo_assets::actor_sprite_map::ACT_TO_SPRITE
             .iter()
             .find(|(id, ..)| *id == act_type)
             .map(|(_, spr, ..)| *spr)
@@ -505,7 +505,7 @@ pub fn spawn_level_actors(
 
         // `ConstructActor` places 29 of the actor types at an offset from
         // the tile the map names - see `actor_flags::ACT_SPAWN_OFFSET`.
-        let (dx, dy) = cosmo_assets::actor_flags::spawn_offset(act_type);
+        let (dx, dy) = opencosmo_assets::actor_flags::spawn_offset(act_type);
         let (ax, ay) = (a.x as i32 + dx, a.y as i32 + dy);
 
         if sprite_type == SPR_HINT_GLOBE {
@@ -569,7 +569,7 @@ pub fn spawn_level_actors(
                     (*width_px as f32 / 8.0).ceil() as i32,
                     height_tiles as i32,
                     frames,
-                    cosmo_assets::actor_flags::flags_for(act_type),
+                    opencosmo_assets::actor_flags::flags_for(act_type),
                 ),
                 crate::motion::PrevPos { x: ax, y: ay },
             ));
@@ -596,7 +596,7 @@ pub fn spawn_level_actors(
         if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {
             entity.insert(crate::enemy::Hazard);
         }
-        if let Some(contents) = cosmo_assets::actor_sprite_map::container_contents(act_type) {
+        if let Some(contents) = opencosmo_assets::actor_sprite_map::container_contents(act_type) {
             if contents != act_type {
                 // ACT_BASKET_NULL "contains itself" - the game's encoding
                 // for an empty basket; nothing to break out of it.

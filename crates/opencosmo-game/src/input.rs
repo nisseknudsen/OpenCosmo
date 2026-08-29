@@ -309,7 +309,7 @@ pub fn config_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("cosmo-reboot").join("controls.json")
+    base.join("opencosmo").join("controls.json")
 }
 
 pub fn load_bindings() -> Bindings {

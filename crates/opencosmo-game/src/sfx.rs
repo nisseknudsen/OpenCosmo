@@ -1,7 +1,7 @@
 //! PC speaker sound effect playback.
 //!
 //! The effects themselves are decoded and rendered to WAV at asset-conversion
-//! time (see `cosmo_assets::sound`); this module loads them and reproduces
+//! time (see `opencosmo_assets::sound`); this module loads them and reproduces
 //! the original's *dispatch* behaviour, which is not simply "play a clip".
 //!
 //! A real PC speaker can only make one sound at a time, so `StartSound()`
@@ -43,8 +43,8 @@ pub mod snd {
 }
 
 /// One sample lasts a single `PCSpeakerService()` call at 140 Hz - see
-/// `cosmo_assets::sound` for the derivation.
-const TICK_HZ: f64 = cosmo_assets::sound::TICK_HZ;
+/// `opencosmo_assets::sound` for the derivation.
+const TICK_HZ: f64 = opencosmo_assets::sound::TICK_HZ;
 
 /// Request to play an effect. Triggers fire these rather than spawning
 /// audio directly, so the priority rule lives in exactly one place.

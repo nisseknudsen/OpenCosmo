@@ -15,13 +15,13 @@ fn main() -> Result<()> {
     );
     std::fs::create_dir_all(&out_dir)?;
 
-    let mut zip = cosmo_assets::shell::open_installer_zip(&sh_path)?;
-    let vol_bytes = cosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.VOL")?;
-    let stn_bytes = cosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.STN")?;
-    let vol = cosmo_assets::vol::parse(&vol_bytes)?;
-    let stn = cosmo_assets::vol::parse(&stn_bytes)?;
+    let mut zip = opencosmo_assets::shell::open_installer_zip(&sh_path)?;
+    let vol_bytes = opencosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.VOL")?;
+    let stn_bytes = opencosmo_assets::shell::read_zip_entry(&mut zip, "COSMO1.STN")?;
+    let vol = opencosmo_assets::vol::parse(&vol_bytes)?;
+    let stn = opencosmo_assets::vol::parse(&stn_bytes)?;
 
-    let find = |entries: &[cosmo_assets::vol::VolEntry], name: &str| -> Vec<u8> {
+    let find = |entries: &[opencosmo_assets::vol::VolEntry], name: &str| -> Vec<u8> {
         entries
             .iter()
             .find(|e| e.name.eq_ignore_ascii_case(name))
@@ -32,22 +32,22 @@ fn main() -> Result<()> {
 
     // 1. Title screen (plane-major fullscreen decode check).
     let title = find(&vol, "TITLE1.MNI");
-    let px = cosmo_assets::tile::decode_fullscreen(&title, 320, 200);
+    let px = opencosmo_assets::tile::decode_fullscreen(&title, 320, 200);
     save_rgba(&out_dir.join("title1.png"), 320, 200, &px)?;
 
     // 2. Full solid tileset as a sprite sheet (sanity check on tile decode).
     let tiles_mni = find(&stn, "TILES.MNI");
-    let solid_tiles = cosmo_assets::tile::decode_all_solid(&tiles_mni);
+    let solid_tiles = opencosmo_assets::tile::decode_all_solid(&tiles_mni);
     save_tile_sheet(&out_dir.join("tiles_solid.png"), &solid_tiles, 40)?;
 
     // 3. Full masked tileset as a sprite sheet.
     let masktile_mni = find(&stn, "MASKTILE.MNI");
-    let masked_tiles = cosmo_assets::tile::decode_all_masked(&masktile_mni);
+    let masked_tiles = opencosmo_assets::tile::decode_all_masked(&masktile_mni);
     save_tile_sheet(&out_dir.join("tiles_masked.png"), &masked_tiles, 40)?;
 
     // 4. Render level A1 using the decoded tileset.
     let a1_mni = find(&vol, "A1.MNI");
-    let level = cosmo_assets::level::parse(&a1_mni)?;
+    let level = opencosmo_assets::level::parse(&a1_mni)?;
     println!(
         "A1.MNI: {}x{} tiles, {} actors",
         level.width,
@@ -67,11 +67,11 @@ fn main() -> Result<()> {
     let mut sheet_tiles: Vec<Vec<[[u8; 4]; 64]>> = Vec::new();
     let mut sheet_dims: Vec<(usize, usize)> = Vec::new();
     for frame in 0..12usize {
-        let info = cosmo_assets::sprite::frame_info(&plyrinfo, 0, frame);
+        let info = opencosmo_assets::sprite::frame_info(&plyrinfo, 0, frame);
         if info.width_tiles == 0 || info.height_tiles == 0 {
             break;
         }
-        let tiles = cosmo_assets::sprite::decode_frame_tiles(&players_mni, &info);
+        let tiles = opencosmo_assets::sprite::decode_frame_tiles(&players_mni, &info);
         sheet_dims.push((info.width_tiles as usize, info.height_tiles as usize));
         sheet_tiles.push(tiles);
     }
@@ -80,14 +80,14 @@ fn main() -> Result<()> {
     // 6. A handful of actor sprite types.
     let actrinfo = to_u16le(&find(&stn, "ACTRINFO.MNI"));
     let actors_mni = find(&stn, "ACTORS.MNI");
-    let banks = cosmo_assets::sprite::split_actor_banks(&actors_mni);
+    let banks = opencosmo_assets::sprite::split_actor_banks(&actors_mni);
     let mut actor_tiles: Vec<Vec<[[u8; 4]; 64]>> = Vec::new();
     let mut actor_dims: Vec<(usize, usize)> = Vec::new();
     for sprite_type in 0..40usize {
         if sprite_type >= actrinfo.len() {
             break;
         }
-        let info = cosmo_assets::sprite::frame_info(&actrinfo, sprite_type, 0);
+        let info = opencosmo_assets::sprite::frame_info(&actrinfo, sprite_type, 0);
         if info.width_tiles == 0
             || info.height_tiles == 0
             || info.width_tiles > 8
@@ -101,7 +101,7 @@ fn main() -> Result<()> {
         {
             continue;
         }
-        let tiles = cosmo_assets::sprite::decode_frame_tiles(bank, &info);
+        let tiles = opencosmo_assets::sprite::decode_frame_tiles(bank, &info);
         actor_dims.push((info.width_tiles as usize, info.height_tiles as usize));
         actor_tiles.push(tiles);
     }
@@ -179,7 +179,7 @@ fn save_tile_sheet(
 
 fn render_level(
     path: &std::path::Path,
-    level: &cosmo_assets::level::Level,
+    level: &opencosmo_assets::level::Level,
     solid: &[[[u8; 4]; 64]],
     masked: &[[[u8; 4]; 64]],
 ) -> Result<()> {
@@ -189,8 +189,8 @@ fn render_level(
             let raw = level.tiles[y * level.width + x];
             let tile: Option<&[[u8; 4]; 64]> = if raw < 80 {
                 None
-            } else if raw >= cosmo_assets::level::MASKED_TILE_THRESHOLD {
-                let idx = ((raw - cosmo_assets::level::MASKED_TILE_THRESHOLD) / 40) as usize;
+            } else if raw >= opencosmo_assets::level::MASKED_TILE_THRESHOLD {
+                let idx = ((raw - opencosmo_assets::level::MASKED_TILE_THRESHOLD) / 40) as usize;
                 masked.get(idx)
             } else {
                 let idx = (raw / 8) as usize;

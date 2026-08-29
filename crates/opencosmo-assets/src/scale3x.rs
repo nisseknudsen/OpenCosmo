@@ -1,7 +1,7 @@
 //! Scale3x (AdvMAME3x), the reference implementation.
 //!
 //! The shipped upscaler is a transcription of this into
-//! `crates/cosmo-game/assets/shaders/present.wgsl`, so that it can run on
+//! `crates/opencosmo-game/assets/shaders/present.wgsl`, so that it can run on
 //! the composited frame and be toggled at runtime. This version exists to
 //! pin down the two properties the whole choice of algorithm rests on, both
 //! of which are easy to assert here and impossible to assert in a shader:

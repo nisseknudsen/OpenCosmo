@@ -511,7 +511,7 @@ pub fn convert_episode(sh_path: &Path, out_dir: &Path, episode: u8) -> Result<Ve
         // melodic decode wrong. No shipped track uses it, but a silently
         // wrong remaster is worse than none.
         if crate::notes::uses_rhythm_mode(&events) {
-            eprintln!("cosmo-assets: {name} uses OPL rhythm mode; skipping remaster");
+            eprintln!("opencosmo-assets: {name} uses OPL rhythm mode; skipping remaster");
             continue;
         }
         let notes = crate::notes::extract_notes(&events);

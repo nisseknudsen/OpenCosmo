@@ -1,6 +1,6 @@
 /target
 /extracted
 /original
-/crates/cosmo-game/assets/generated
+/crates/opencosmo-game/assets/generated
 /.claude
 *.swp

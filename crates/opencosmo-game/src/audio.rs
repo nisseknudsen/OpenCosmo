@@ -10,7 +10,7 @@ pub struct MusicTrack;
 /// Both are the same music: the remastered mix is rendered from the notes
 /// recovered out of the original's own register stream, so it is Bobby
 /// Prince's composition either way - only the instruments differ. See
-/// `cosmo_assets::notes` and `cosmo_assets::lofi`.
+/// `opencosmo_assets::notes` and `opencosmo_assets::lofi`.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AudioMode {
     /// The AdLib OPL2 mix, as the hardware produced it.

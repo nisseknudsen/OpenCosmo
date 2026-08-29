@@ -28,18 +28,18 @@ fn main() -> Result<()> {
     let workspace_root = manifest_dir
         .parent()
         .and_then(|p| p.parent())
-        .context("expected crates/cosmo-game to be two levels under the workspace root")?;
+        .context("expected crates/opencosmo-game to be two levels under the workspace root")?;
 
     let sh_path = find_installer(workspace_root)?;
     println!("cargo:rerun-if-changed={}", sh_path.display());
     println!("cargo:rerun-if-env-changed=COSMO_INSTALLER");
 
     let out_dir = manifest_dir.join("assets/generated");
-    let converted = cosmo_assets::convert::convert_all_episodes_if_stale(&sh_path, &out_dir)?;
+    let converted = opencosmo_assets::convert::convert_all_episodes_if_stale(&sh_path, &out_dir)?;
     if converted {
         println!(
-            "cargo:warning=cosmo-assets: converted all {} episodes into {}",
-            cosmo_assets::convert::EPISODES.len(),
+            "cargo:warning=opencosmo-assets: converted all {} episodes into {}",
+            opencosmo_assets::convert::EPISODES.len(),
             out_dir.display()
         );
     }

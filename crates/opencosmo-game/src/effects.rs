@@ -1,7 +1,7 @@
 //! Transient visual effects: explosions, pounce debris, and score pop-ups.
 //!
 //! These sprites are never placed in a level - the game creates them at
-//! runtime - so `cosmo_assets::convert::EFFECT_SPRITES` force-converts them
+//! runtime - so `opencosmo_assets::convert::EFFECT_SPRITES` force-converts them
 //! even though no map actor references them.
 //!
 //! Explosion timing follows `NewExplosion`/`DrawExplosions`
@@ -41,7 +41,7 @@ pub struct EffectAssets {
 impl EffectAssets {
     pub fn load(asset_server: &AssetServer, data: &GameData) -> Self {
         let mut sprites = HashMap::new();
-        for &spr in cosmo_assets::convert::EFFECT_SPRITES {
+        for &spr in opencosmo_assets::convert::EFFECT_SPRITES {
             let rel_dir = format!("sprites/actors/{spr}");
             let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
                 continue;

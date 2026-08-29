@@ -1,5 +1,5 @@
 //! Loads the generated (converted) assets from disk. These are small local
-//! JSON/PNG files produced by `cosmo-assets` at build time, so plain
+//! JSON/PNG files produced by `opencosmo-assets` at build time, so plain
 //! synchronous `std::fs` reads at startup are simpler than routing through
 //! Bevy's async asset server for the structured (non-image) data.
 
@@ -98,7 +98,7 @@ impl GameData {
         std::env::var("COSMO_EPISODE")
             .ok()
             .and_then(|v| v.trim().parse::<u8>().ok())
-            .filter(|n| cosmo_assets::convert::EPISODES.contains(n))
+            .filter(|n| opencosmo_assets::convert::EPISODES.contains(n))
             .unwrap_or(1)
     }
 

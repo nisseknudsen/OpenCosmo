@@ -345,7 +345,7 @@ fn insert_core_resources(app: &mut App) {
         .resource_mut::<Assets<TextureAtlasLayout>>()
         .add(TextureAtlasLayout::from_grid(
             UVec2::splat(8),
-            cosmo_assets::convert::FONT_ATLAS_COLS,
+            opencosmo_assets::convert::FONT_ATLAS_COLS,
             10,
             None,
             None,

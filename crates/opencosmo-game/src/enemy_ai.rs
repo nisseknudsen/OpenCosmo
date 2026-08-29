@@ -279,10 +279,10 @@ impl Enemy {
         width_tiles: i32,
         height_tiles: i32,
         frames: Vec<Handle<Image>>,
-        flags: cosmo_assets::actor_flags::ActorFlags,
+        flags: opencosmo_assets::actor_flags::ActorFlags,
     ) -> Self {
         // All four now come from the actor's own ConstructActor call rather
-        // than from a guess per kind - see `cosmo_assets::actor_flags`. The
+        // than from a guess per kind - see `opencosmo_assets::actor_flags`. The
         // pair that matters most is stay_active + weighted, which is how a
         // prize perched out of view falls once you look up at it.
         let acrophile = flags.acrophile;

@@ -369,7 +369,7 @@ original open-questions list has now been settled by reading further into
    data_offset, bank}`, with pixel data as `width*height` consecutive
    40-byte masked tiles in row-major order. Frame counts are bounded by the
    next sprite's base offset in the info table. See
-   `crates/cosmo-assets/src/sprite.rs`.
+   `crates/opencosmo-assets/src/sprite.rs`.
 2. **EGA palette** — the game only ever reprograms register 5 (as an
    animation key colour); every other register stays at the BIOS default,
    so the stock 16-colour table is correct. See `palette.rs`.
@@ -381,7 +381,7 @@ original open-questions list has now been settled by reading further into
 4. **Map actor type offset** — confirmed `ACT_* = map_type - 31` from
    `NewMapActorAtIndex()` (game1.c:10252). `ACT_*` and `SPR_*` are separate
    numbering spaces; the mapping between them is in
-   `crates/cosmo-assets/src/actor_sprite_map.rs`, extracted from every
+   `crates/opencosmo-assets/src/actor_sprite_map.rs`, extracted from every
    `ConstructActor` call.
 5. **Recoil / pounce triggers** — `TryPounce` (game1.c:6844-6895) plus the
    per-sprite `TryPounce(...)` values in the switch at game1.c:7094+.

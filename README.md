@@ -1,254 +1,265 @@
-# Cosmo's Cosmic Adventure — Reboot
+# OpenCosmo
 
-A from-scratch Rust/Bevy remake of Apogee's 1992 DOS platformer *Cosmo's
-Cosmic Adventure*, built by decoding real game assets out of your GOG
-installer at build time and porting the original engine's physics/behavior
-from source.
+An open-source, from-scratch reimplementation of Apogee's 1992 DOS platformer
+*Cosmo's Cosmic Adventure*, written in Rust on the [Bevy](https://bevyengine.org)
+engine.
 
-## Status: playable, all three episodes
+**This repository contains no game data.** It ships only code, which reads the
+art, levels, music and sound out of a copy of the game *you* own — at build
+time, on your machine. You need your own copy to play.
 
-- All three episodes convert and play: 14/13/13 levels respectively, each
-  with its own level naming (`A*`/`B*`/`C*`), bonus stages, backdrops and
-  music. Select with `COSMO_EPISODE=1|2|3`.
-- Player movement is a faithful port of the original's `MovePlayer()` /
-  `TestPlayerMove()`: tile-stepped walking, the real jump curve, gravity
-  ramp-up, slopes, and collision — running on an 18.2Hz fixed tick
-  matching the DOS timer rate the original used. Walls that can be clung
-  to are grabbed automatically by walking into them mid-air and climbed by
-  jumping; ones that are *also* slippery let Cosmo slide down a row a tick
-  until he runs out of wall.
-- The view is the original's stateful `scrollX`/`scrollY` pair rather than
-  a camera centred on the player: it only gives chase once the player
-  leaves a dead zone, and holding up or down while standing still walks it
-  through the world a row at a time. That last part is a mechanic, not a
-  flourish — actors only run while on screen, so looking up at a stack of
-  prizes overhead is what wakes them and drops them on you.
-- Hint globes work: standing at one and pressing up opens its message, and
-  the first globe of each level speaks up unprompted. All 26 episode-1
-  messages plus episodes 2 and 3's are transcribed from the source.
-- Dying replays the level from scratch — enemies included — rather than
-  just moving the player back, matching the original's
-  `LoadGameState('T'); InitializeLevel(levelNum)`.
-- Actors (enemies, items, decorations) render at their authored positions
-  using the correct sprite for each type — `ACT_*` (map actor type) and
-  `SPR_*` (the sprite actually drawn) are different numbering spaces that
-  only sometimes coincide, resolved via `actor_sprite_map.rs`.
-- Collectibles (food/gems, a curated list of `ACT_*` ids) add to score on
-  contact and despawn. A curated hazard subset damages the player on
-  contact (health starts at 4, matching the original) and a "walker"
-  subset of those patrols left/right, reversing at walls/ledges — this is
-  a pragmatic generic pass, *not* a per-type port of each actor's real
-  behavior function (`ActXxx` in game1.c; there are ~250 of them).
-- Original AdLib music plays per-level (decoded IMF → OPL2 synthesis →
-  looped WAV playback), matched to each level via the real per-level
-  track assignment (packed into the level header's flags word), alongside
-  the PC-speaker sound effects with the original's priority behaviour.
-- A second, re-voiced soundtrack, toggled with **F6**. Off by default —
-  it is not considered good enough yet and the approach is being
-  reconsidered.
-  The IMF register stream is decoded back into *notes* — pitch, timing,
-  length and velocity are all recoverable from documented hardware
-  registers — and re-rendered with warm additive voices, tape wobble,
-  vinyl crackle and a low-pass. The composition is untouched; only the
-  instruments change. Deterministic and offline, so rebuilds are
-  byte-identical and the loop still joins seamlessly (release tails wrap
-  onto the start of the pass).
-- Collectibles use the original's own pickup table: score varies by item
-  (200/400/800/1600/3200), stars and bombs feed their own counters, a
-  hamburger widens the health meter and a power-up heals or pays out.
-- Dying rewinds score, stars, bombs and health to their values on entering
-  the level, the way the original's checkpoint save does.
-- The status bar is rebuilt from the game's own `STATUS.MNI` panel and
-  `FONTS.MNI` glyphs — score, stars and bombs as flush-right digit runs,
-  health as the original's stacked filled/empty cell meter.
-- Title screen, main menu and credits screen, drawn with the real artwork
-  and font. The original's menu also offers Restore/Story/Instructions/
-  High Scores/Game Redefine/Ordering Info/BBS/Demo, which depend on
-  subsystems this remake hasn't ported, so only working entries are shown.
-- Reaching a level's exit shows the original's "Section Completed!" /
-  "Bonus Level Completed!!" frame and advances by the original's own rule
-  (`NextLevel`, game1.c:9968-10046) — which runs in fours, two main levels
-  then a pair of bonus stages, and **gates the bonus stages on stars**:
-  more than 49 earns the better one, more than 24 the lesser, and fewer
-  skips them entirely. Note that the *exit sign* is
-  the exit in most levels, and its tick function does nothing — the level
-  ends from the sprite-keyed interaction switch instead, on the sign coming
-  into view.
-- Tiles flagged `TILE_IN_FRONT` draw over the player and actors, which is
-  the game's own foreground layer — it is why Cosmo sinks behind a slope's
-  leading edge instead of walking on top of it. 57% of drawn tiles carry
-  the flag; mostly solid terrain, but 2.1% are pure decoration in front of
-  the action.
-- Actors are placed at the offsets their `ConstructActor` call specifies —
-  29 of the types sit one to seven tiles from the cell the map names.
-- Pedestals are the column-with-a-platform they are in the original: a
-  stalk 13/19/25 tiles tall with a five-wide cap on top that you can stand
-  on, rather than the cap alone sitting on the floor.
-- The invincibility cube wraps the player in a bubble for 240 ticks, during
-  which nothing — including their own bombs — can hurt them.
-- Actors honour the four flags their `ConstructActor` call carries —
-  force-active, stay-active, weighted, acrophile — extracted from the
-  source into a table. Between them these define a mechanic: a prize that
-  is `stay_active + weighted` sits dormant out of sight, wakes permanently
-  the first time it is seen, and then falls. That is why looking up at a
-  tall structure drops its bonuses down to you.
-- Per-actor enemy AI for 14 of the original's `ActXxx()` behaviours,
-  covering ~47% of Episode 1's level actors.
-- Pouncing kills creatures and launches the recoil bounce, with per-type
-  recoil and hit points (a ghost soaks four pounces, a parachute ball two,
-  a basket bursts with a softer bounce). Bombs are collected, placed with
-  Alt, and detonate into a real 6x6-tile blast that damages enemies and
-  the player alike — and reaches things a pounce can't, like the roamer
-  slug.
-- Everything is drawn into one 320x200 offscreen buffer at the original's
-  exact resolution, and that buffer is scaled to the window exactly once.
-  Two presentation modes, toggled with **F5**: *remaster* (the default)
-  fills the window with sharp-bilinear scaling plus a restrained CRT pass —
-  scanlines, brightness-thresholded bloom, a slight vignette — and
-  *authentic* uses whole-number scaling with letterboxing and no filtering
-  at all. Rendering to a fixed buffer is also what let the layout match the
-  original's screen exactly, including the 8px black border around the play
-  area that the window-relative version had no way to express.
-- **Scale3x** smoothing of the artwork, part of the remaster preset.
-  Chosen over the smoother upscalers (xBRZ, HQx, neural) for one property:
-  it only ever *copies* a neighbouring pixel, never blends two, so the
-  16-colour EGA palette survives exactly. It also leaves dithering alone,
-  which matters because this game's backdrops run to 27% dither by pixel
-  count and a blending upscaler turns that into blobs.
-- **Smooth motion**, also part of the remaster preset. Game logic stays on
-  its 18.2Hz tick — every physics constant is expressed per tick, so
-  raising the rate would just make Cosmo run three times faster — but
-  drawing is decoupled from it, so a tick's worth of movement is spread
-  across the frames that fall inside it. Measured: 176 distinct drawn
-  positions across a walk instead of 53, in 1–3 pixel steps rather than
-  8-pixel jumps, and still landing on whole pixels so the pixel grid (and
-  Scale3x) is undisturbed.
-- Six rebindable actions (the same six the original stores), each carrying
-  several bindings at once so keyboard and gamepad work without a mode
-  switch. Input is sampled every frame and drained by the 18.2Hz gameplay
-  tick, so a press shorter than ~55ms can no longer fall between two ticks
-  and be lost — which used to look like the physics dropping a jump.
-- F1 opens the help menu (restart, level warp, quit). The original also
-  offers Save/Restore/Help/Game-redefine/High-scores, which depend on
-  unported subsystems, so only working entries are listed. "L)evel Warp"
-  is a development aid with no counterpart in the shipped game: it jumps
-  to any slot in the episode's progression.
-- Not yet implemented: switches and doors, turret projectiles, moving
-  platforms (needs live map-tile mutation), the scooter and transporter,
-  the dizzy/ice-slide player states, and the actor types only episodes 2–3
-  enable. There is no lives or game-over system because the original has
-  none — dying costs you the level's progress, not a life.
+## What it's for
 
-## Building & running
+Two things at once, and the tension between them is the point:
 
-You need your own copy of the GOG installer for the game (the one you
-already own) — this repo contains no game assets, only code that reads
-yours. Requires the original `original/*.sh` (excluded from git) to build,
-since asset conversion happens in `cosmo-game`'s `build.rs`.
+**Faithfulness.** Behaviour is ported from
+[Cosmore](https://github.com/smitelli/cosmore), Scott Smitelli's MIT-licensed
+decompilation of the original executables, rather than reverse-engineered by
+eye. Physics run on an 18.2 Hz fixed tick because that is the rate the DOS
+timer interrupted at, and every constant in the original is expressed per
+tick — the jump curve is a table of ten per-tick offsets, walking is one tile
+per tick. The camera is the original's stateful `scrollX`/`scrollY` pair with
+its dead zone, not a camera centred on the player. Non-trivial decisions in
+this codebase cite the source file and line they came from.
+
+**A modern presentation layer that doesn't lie about the pixels.** Everything
+draws into a single 320×200 buffer at the original's exact resolution, which
+is scaled to the window exactly once. On top of that sits an optional
+*remaster* mode — Scale3x smoothing, sharp scaling, a restrained CRT pass, and
+motion interpolation — every part of which is off in *authentic* mode. The
+simulation is identical either way; only the presentation changes.
+
+## Requirements
+
+- A **Rust toolchain** (stable, 2021 edition or later) — install via
+  [rustup](https://rustup.rs).
+- A GPU/driver stack that Bevy 0.16 supports (Vulkan, Metal or DX12).
+- **Your own copy of the game.** The build reads the GOG installer for
+  *Cosmo's Cosmic Adventure* (a `.sh` file, which is a shell script with a
+  zip archive appended). The GOG release contains all three episodes' data, so
+  nothing else needs acquiring.
+- On Linux, Bevy's usual system dependencies (`alsa-lib`, `libudev`,
+  `libX11`/Wayland development packages). See
+  [Bevy's Linux setup notes](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md).
+
+## Building and running
+
+Put your GOG installer in `./original/` (the directory is gitignored), then:
 
 ```sh
-# from the repo root, with your GOG installer .sh placed in ./original/
-cargo run -p cosmo-game
+cargo run --release -p opencosmo-game
 ```
 
-The first build converts assets into `crates/cosmo-game/assets/generated/`
-(gitignored) and caches the result by content hash — subsequent builds skip
-reconversion entirely unless the installer file or converter code changes.
-To point at an installer somewhere else: `COSMO_INSTALLER=/path/to/installer.sh cargo run -p cosmo-game`.
+The first build converts assets into `crates/opencosmo-game/assets/generated/`
+(also gitignored) and caches the result by content hash, so later builds skip
+reconversion entirely unless the installer or the converter code changes.
 
-**Controls**: Left/Right or A/D to move, Ctrl or Space to jump, Alt to
-drop a bomb, Up/Down (or W/S) to look up/down while stationary. Jump onto
-a creature to pounce it. Ctrl/Alt match the original's own defaults; Space
-is added as a modern alternative for jump.
+To point at an installer elsewhere:
 
-Gamepads work without configuration (d-pad or left stick to move, bottom
-face button to jump, left face button to bomb), and everything is
-rebindable from **G)ame Redefine** on the main menu — pick an action's
-number, press the key, button or stick direction you want, and it is saved
-to `$XDG_CONFIG_HOME/cosmo-reboot/controls.json`. A stick is treated as a
-d-pad with a firm deadzone: movement is tile-stepped at 18.2Hz, so there
-is no sub-tile precision for an analogue reading to express.
+```sh
+COSMO_INSTALLER=/path/to/installer.sh cargo run --release -p opencosmo-game
+```
 
-**Presentation**: **F5** switches between two presets — *remaster*
-(sharp scaling, Scale3x smoothing, scanlines, bloom, smooth motion) and
-*authentic* (whole-number scaling, letterboxed, untouched pixels, 18.2Hz
-motion). Individual effects can be dialled with `COSMO_SCANLINE=0.3`,
-`COSMO_BLOOM`, `COSMO_VIGNETTE`, `COSMO_CURVE`, `COSMO_SMOOTH` and
-`COSMO_SMOOTH_MOTION=on|off`. `COSMO_VSYNC=off` uncaps the frame rate and
-`COSMO_WINDOW=1280x800` sets the window size.
+`--release` is worth it: the game crate builds at `opt-level = 1` in a dev
+profile, and the present shader's cost scales with your window's pixel count.
 
-Build with `--release` if it feels sluggish — the game's own crate is only
-at `opt-level = 1` in a dev build, and the present shader's cost scales
-with the window's pixel count.
+Pick an episode with `COSMO_EPISODE=1|2|3` (there is no in-game episode
+selector yet). Episode 1 is the most complete; 2 and 3 convert and play, but
+lean on actor types that aren't ported yet.
 
-**Menu**: any key at the title screen, then B to begin, C for credits,
-T back to the title, Q to quit. In game, F1 opens the help menu (R to
-restart the level, L for the level warp, Q back to the main menu, ESC to
-resume); the game is paused while it's open. In the level warp, the arrow
-keys move the cursor (left/right jump a column), Enter goes, ESC backs
-out. Any key dismisses a hint globe's message.
+## Controls
 
-**Debug env vars**, all used for headless verification during development
-rather than normal play: `COSMO_LEVEL=<stem>` picks the starting level
-(e.g. `bonus1`); `COSMO_STATE=menu|credits|playing` jumps straight to a
-screen; `COSMO_SPAWN=x,y` overrides the player's start tile;
-`COSMO_GIVE_BOMBS=n` stocks the bomb counter; `COSMO_HELP=1` /
-`COSMO_WARP=1` open the help menu or level warp on the first frame;
-`COSMO_PRESENT=authentic|remaster` picks the presentation mode;
-`COSMO_AUDIO=authentic|remaster` picks the soundtrack;
-`COSMO_EPISODE=1|2|3` picks the episode; `COSMO_AUTOPLAY=1` drives
-the player automatically. Run with `RUST_LOG=cosmo_game=debug` to log
-pounce/bomb/blast events.
+| Action | Default binding |
+| --- | --- |
+| Move | Left/Right, or A/D |
+| Jump | Ctrl or Space |
+| Bomb | Alt |
+| Look up / down | Up/Down, or W/S (while standing still) |
 
-**Verifying a mechanic headlessly.** `COSMO_INPUT` scripts the controls as
-comma-separated `<keys><ticks>` steps — keys being `w`/`e` (west/east),
-`u`/`d` (look up/down), `j` (jump), `b` (bomb), `k` (dismiss a text
-frame), `.` (nothing). `COSMO_TRACE=<n>` prints player position, facing,
-frame, scroll, cling and live enemy count every nth tick;
-`COSMO_SHOT=<path>` grabs the window once (at `COSMO_SHOT_AT`, default
-tick 30), `COSMO_SHOT_RAW=1` grabs the 320x200 virtual screen instead —
-the one to use for pixel-alignment questions, since it hasn't been through
-the present shader or the display's scale factor — and
-`COSMO_QUIT_AFTER=<ticks>` ends the run. `COSMO_FPS=1` reports frame
-pacing (with the window size, without which two runs aren't comparable)
-and `COSMO_MOTION=1` logs the player's *drawn* position every frame,
-which is the only way to see whether interpolation is doing anything. So, for example,
-checking that looking up and down actually pans the view:
+Jump onto a creature to pounce it. Ctrl and Alt are the original's own
+defaults; Space is added as a modern alternative for jump.
+
+Walls that can be clung to are grabbed automatically by walking into them
+mid-air, and climbed by jumping. Walls that are *also* slippery let Cosmo
+slide down a row per tick until he runs out of wall.
+
+Looking up and down is a mechanic, not a flourish: actors only run while on
+screen, so panning up to a stack of prizes overhead is what wakes them — and
+drops them on you.
+
+**Gamepads** work with no configuration (d-pad or left stick to move, bottom
+face button to jump, left face button to bomb). Everything is rebindable from
+**G)ame Redefine** on the main menu: pick an action's number, then press the
+key, button or stick direction you want. Bindings are saved to
+`$XDG_CONFIG_HOME/opencosmo/controls.json`. Each of the six actions holds
+several bindings at once, so keyboard and gamepad work without a mode switch.
+A stick is treated as a d-pad with a firm deadzone — movement is tile-stepped
+at 18.2 Hz, so there is no sub-tile precision for an analogue reading to
+express.
+
+**Menus**: any key at the title screen, then `B` to begin, `C` for credits,
+`T` back to the title, `Q` to quit. In game, `F1` opens the help menu (`R`
+restart level, `L` level warp, `Q` back to the main menu, `Esc` resume); the
+game pauses while it's open. Any key dismisses a hint globe's message.
+
+## Presentation modes
+
+**F5** toggles between the two presets.
+
+| | Authentic | Remaster (default) |
+| --- | --- | --- |
+| Scaling | whole-number, letterboxed | sharp-bilinear, fills the window |
+| Artwork | untouched pixels | Scale3x smoothing |
+| CRT pass | none | scanlines, thresholded bloom, slight vignette |
+| Motion | 18.2 Hz, one step per tick | interpolated across frames |
+
+**Scale3x** was chosen over smoother upscalers (xBRZ, HQx, neural) for one
+property: it only ever *copies* a neighbouring pixel, never blends two, so the
+16-colour EGA palette survives exactly. It also leaves interior dithering
+alone, which matters because this game's backdrops run to 27% dither by pixel
+count, and a blending upscaler turns that into blobs.
+
+**Smooth motion** keeps game logic on its 18.2 Hz tick — raising the tick rate
+wouldn't smooth anything, it would make Cosmo run three times faster — and
+decouples drawing from it instead, spreading a tick's worth of movement across
+the frames that fall inside it. Measured: 176 distinct drawn positions across a
+walk instead of 53, in 1–3 pixel steps rather than 8-pixel jumps, still landing
+on whole pixels so the pixel grid (and Scale3x) is undisturbed.
+
+Individual effects can be dialled independently of the preset:
+`COSMO_SCANLINE=0.3`, `COSMO_BLOOM`, `COSMO_VIGNETTE`, `COSMO_CURVE`,
+`COSMO_SMOOTH`, `COSMO_SMOOTH_MOTION=on|off`. `COSMO_VSYNC=off` uncaps the
+frame rate; `COSMO_WINDOW=1280x800` sets the window size;
+`COSMO_PRESENT=authentic|remaster` picks the mode at launch.
+
+## Audio
+
+The original AdLib soundtrack plays per level — IMF decoded to OPL2 synthesis,
+rendered to looping WAV — matched to each level by the real per-level track
+assignment packed into the level header's flags word. PC-speaker sound effects
+run with the original's monophonic priority behaviour, where a quieter effect
+is dropped outright rather than mixed.
+
+**F6** toggles an experimental re-voiced soundtrack, **off by default**. It
+decodes the IMF register stream back into notes — pitch, timing, length and
+velocity are all recoverable from documented hardware registers — and
+re-renders them with warm additive voices, tape wobble and a low-pass. The
+composition is untouched; only the instruments change. It isn't good enough
+yet and the approach is being reconsidered; the code stays reachable via
+`COSMO_AUDIO=remaster` for anyone who wants to pick it up.
+
+## Status
+
+**Under active development.** Playable start to finish on episode 1, with
+plenty still missing. Expect rough edges, and expect internals to move.
+
+Working: player movement, jumping, slopes, wall-clinging and collision, ported
+from `MovePlayer()`/`TestPlayerMove()`; the original's scroll camera; the level
+progression rule from `NextLevel()`, including the bonus stages it gates on
+your star count; pouncing and bombs with per-type hit points and recoil; the
+pickup table with its real per-item scores; the status bar rebuilt from the
+game's own panel and font; the title, menu and credits screens; hint globes
+with all messages transcribed from source; the foreground tile layer; actor
+spawn offsets and the four `ConstructActor` flags (which between them define
+the "look up and the prizes fall" behaviour); death replaying the level from
+scratch, enemies included, and rewinding score, stars, bombs and health.
+
+Per-actor AI is ported for 14 of the original's `ActXxx()` behaviours, covering
+roughly 47% of episode 1's level actors. The rest fall back to a generic
+hazard/walker pass, which is a pragmatic stopgap rather than a port.
+
+Not yet implemented: switches and doors, turret projectiles, moving platforms
+(needs live map-tile mutation), the scooter and transporter, the dizzy and
+ice-slide player states, and the actor types only episodes 2–3 enable. There is
+no lives or game-over system because the original has none — dying costs you
+the level's progress, not a life.
+
+## Contributing
+
+Contributions are very welcome — particularly ports of individual `ActXxx()`
+behaviours, which are self-contained, well-specified by the decompilation, and
+the single biggest gap.
+
+A few conventions worth knowing before you start:
+
+- **Cite the source.** When porting behaviour, reference the file and line in
+  `reference/cosmore/` that it came from, in a comment. That is what makes
+  disagreements about "is this faithful?" answerable.
+- **Prefer a faithful port to a plausible one.** If the original does something
+  that looks like a bug, it probably shipped that way, and the goal is to match
+  it. Note it in a comment rather than fixing it silently.
+- **Verify empirically.** `cargo test --workspace` should stay green, and
+  behavioural changes are best backed by a scripted headless run (below) or a
+  unit test over the pure logic.
+- Keep new presentation features behind the authentic/remaster split. Authentic
+  mode is meant to stay pixel-exact.
+
+Issues and pull requests both welcome. If you're picking up something large,
+opening an issue first saves duplicated effort.
+
+## Development
+
+### Layout
+
+- `crates/opencosmo-assets/` — the asset pipeline. Unwraps the makeself/mojosetup
+  installer, parses Apogee's VOL/STN directory format, decodes EGA planar tile
+  and sprite graphics, level maps and AdLib tracks, and writes PNG/JSON/WAV to
+  a cache-stamped output directory. Each module's doc comment carries exact
+  byte-format citations.
+- `crates/opencosmo-game/` — the Bevy game. `build.rs` triggers conversion;
+  `src/` has a module per subsystem (tileset, level, player, camera, actors,
+  flow, hud, …).
+- `reference/cosmore/` — vendored copy of the decompilation (MIT). The primary
+  source for every format and physics decision here.
+- `docs/file-formats.md` — technical reference for every file format and
+  physics constant, with citations and an explicit list of what is confirmed
+  versus still uncertain.
+
+### Headless verification
+
+The game can be scripted and traced, which is how most behaviour here gets
+checked. `COSMO_INPUT` takes comma-separated `<keys><ticks>` steps, where keys
+are `w`/`e` (west/east), `u`/`d` (look up/down), `j` (jump), `b` (bomb), `k`
+(dismiss a text frame) and `.` (nothing):
 
 ```sh
 COSMO_STATE=playing COSMO_LEVEL=a1 COSMO_TRACE=3 COSMO_QUIT_AFTER=120 \
-  COSMO_INPUT="e8,k3,e30,.3,u30,.3,d40" cargo run -p cosmo-game
+  COSMO_INPUT="e8,k3,e30,.3,u30,.3,d40" cargo run -p opencosmo-game
 ```
 
-The `rel_row` column in that trace is the player's row within the window,
-and it is what should move while `pos` stays put.
+That one checks that looking up and down pans the view: the `rel_row` column
+is the player's row within the window, and it should move while `pos` stays
+put.
 
-## Architecture
+| Variable | Effect |
+| --- | --- |
+| `COSMO_TRACE=<n>` | print position, facing, frame, scroll, cling and enemy count every nth tick |
+| `COSMO_SHOT=<path>` | grab the window once, at `COSMO_SHOT_AT` (default tick 30) |
+| `COSMO_SHOT_RAW=1` | grab the 320×200 virtual screen instead — use this for pixel-alignment questions, since it hasn't been through the present shader or the display scale factor |
+| `COSMO_QUIT_AFTER=<ticks>` | end the run |
+| `COSMO_FPS=1` | report frame pacing, with window size (without which two runs aren't comparable) |
+| `COSMO_MOTION=1` | log the player's *drawn* position every frame — the only way to see whether interpolation is doing anything |
+| `COSMO_LEVEL=<stem>` | starting level, e.g. `bonus1` |
+| `COSMO_STATE=menu\|credits\|playing` | jump straight to a screen |
+| `COSMO_SPAWN=x,y` | override the player's start tile |
+| `COSMO_GIVE_BOMBS=n` | stock the bomb counter |
+| `COSMO_HELP=1`, `COSMO_WARP=1` | open the help menu or level warp on frame one |
+| `COSMO_AUTOPLAY=1` | drive the player automatically |
 
-- `crates/cosmo-assets/` — the asset pipeline. Unwraps the makeself/mojosetup
-  installer shell script, parses Apogee's VOL/STN directory format, decodes
-  EGA planar tile/sprite graphics, level maps, and (music format permitting)
-  AdLib tracks, and writes everything to a cache-stamped output directory as
-  PNGs/JSON/WAV. See each module's doc comment for exact byte-format
-  citations back to the source.
-- `crates/cosmo-game/` — the Bevy game. `build.rs` triggers asset conversion;
-  `src/` has one module per subsystem (tileset, level, player, camera,
-  actors, flow/level-progression, hud).
-- `reference/cosmore/` — a vendored copy of `smitelli/cosmore` (MIT
-  licensed), a full decompilation of the original `COSMO{1,2,3}.EXE`. This
-  is the primary source for every format/physics decision in this project;
-  see `docs/file-formats.md` for the research summary and exact citations.
-- `docs/file-formats.md` — technical reference for every file format and
-  physics constant, with source line citations and an explicit list of
-  what's confirmed vs. still uncertain.
+`RUST_LOG=opencosmo=debug` logs pounce, bomb and blast events.
 
-## Extending to Episodes 2 & 3
+The **level warp** (`F1` → `L`) jumps to any slot in the episode's progression.
+It's a development aid with no counterpart in the shipped game.
 
-The pipeline is already episode-agnostic at the format level (VOL/STN/tile/
-level/sprite decoding doesn't care which episode's data it's fed). Extending
-requires: adding `COSMO2`/`COSMO3` variants of `convert_episode1` (rename to
-something like `convert_episode`, parameterized by the `COSMO{N}` file
-prefix) and a level-select/episode-select flow in `cosmo-game`. The GOG
-installer used here already contains all three episodes' data
-(`COSMO2.VOL`/`.STN`/`.EXE`, `COSMO3.VOL`/`.STN`/`.EXE`), so no additional
-asset acquisition is needed.
+## Licence and credits
+
+OpenCosmo is [MIT licensed](LICENSE).
+
+Game logic is ported from [Cosmore](https://github.com/smitelli/cosmore) by
+Scott Smitelli and contributors, also MIT licensed; its notice is preserved at
+`reference/cosmore/LICENSE`. This project would not exist without it.
+
+*Cosmo's Cosmic Adventure* is copyright © 1992 Apogee Software, Ltd. This
+project is not affiliated with, endorsed by, or supported by Apogee or
+3D Realms, and distributes none of their data — only code that reads a copy
+you already own.

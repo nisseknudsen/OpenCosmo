@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/cosmo-assets", "crates/cosmo-game"]
+members = ["crates/opencosmo-assets", "crates/opencosmo-game"]
 
 [workspace.package]
 edition = "2021"
-license = "Proprietary"
+license = "MIT"
 publish = false
 
 [profile.dev]
