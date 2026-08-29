@@ -217,6 +217,7 @@ mod tests {
     fn the_start_framing_puts_the_player_off_centre() {
         let lvl = CurrentLevel {
             name: "test".into(),
+            level: LevelJson::default(),
             width: 128,
             height: 64,
             content_min: (0, 0),

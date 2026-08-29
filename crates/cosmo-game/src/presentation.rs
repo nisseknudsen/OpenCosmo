@@ -73,7 +73,8 @@ impl PresentationMode {
 
     /// Lets an individual effect be dialled from the environment, e.g.
     /// `COSMO_SCANLINE=0.3`. Handy for taste, and for isolating what a
-    /// given effect costs per frame.
+    /// given effect costs per frame. Read once into `Tuning`, never per
+    /// frame - `settings()` is on the frame path.
     fn tweak(name: &str, default: f32) -> f32 {
         std::env::var(name)
             .ok()
@@ -118,6 +119,33 @@ impl PresentationMode {
                 curvature: Self::tweak("COSMO_CURVE", 0.0),
                 _pad: 0.0,
             },
+        }
+    }
+}
+
+/// Both modes' settings, resolved from the environment once.
+///
+/// `settings()` used to be called from `fit_present_quad` every frame, and
+/// each call did five `std::env::var` lookups for the effect knobs - five
+/// string allocations per frame to answer questions fixed at launch.
+#[derive(Resource)]
+pub struct Tuning {
+    authentic: PresentSettings,
+    remaster: PresentSettings,
+}
+
+impl Tuning {
+    pub fn from_env() -> Self {
+        Tuning {
+            authentic: PresentationMode::Authentic.settings(),
+            remaster: PresentationMode::Remaster.settings(),
+        }
+    }
+
+    pub fn for_mode(&self, mode: PresentationMode) -> PresentSettings {
+        match mode {
+            PresentationMode::Authentic => self.authentic.clone(),
+            PresentationMode::Remaster => self.remaster.clone(),
         }
     }
 }
@@ -243,6 +271,7 @@ pub fn insert_virtual_screen(app: &mut App) {
     ));
 
     app.insert_resource(VirtualScreen(handle));
+    app.insert_resource(Tuning::from_env());
     app.insert_resource(mode);
 }
 
@@ -259,6 +288,7 @@ fn toggle_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<PresentationMod
 fn fit_present_quad(
     windows: Query<&Window>,
     mode: Res<PresentationMode>,
+    tuning: Res<Tuning>,
     mut materials: ResMut<Assets<PresentMaterial>>,
     mut quad: Query<(&mut Transform, &MeshMaterial2d<PresentMaterial>), With<PresentQuad>>,
 ) {
@@ -284,7 +314,7 @@ fn fit_present_quad(
     );
 
     if let Some(material) = materials.get_mut(&handle.0) {
-        let mut settings = mode.settings();
+        let mut settings = tuning.for_mode(*mode);
         // ...but the shader reasons in *physical* pixels, because how wide
         // the blend ramp should be is a rasterisation question. Feeding it
         // logical pixels on a HiDPI display made the ramp `scale_factor`

@@ -25,7 +25,7 @@ pub struct LevelActorJson {
     pub y: u16,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Default)]
 pub struct LevelJson {
     pub name: String,
     pub width: usize,
@@ -188,4 +188,33 @@ impl GameData {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> anyhow::Result<T> {
     let bytes = std::fs::read(path)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A measurement rather than an assertion, kept because its answer is
+    /// why `CurrentLevel` carries the parsed map instead of systems
+    /// re-reading it: four per-tick calls at this cost is about 1ms of
+    /// every tick spent rebuilding something that cannot change.
+    #[test]
+    fn level_load_cost() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        if !dir.join("generated/ep1/tileset.json").exists() {
+            // Assets are generated from the user's own installer, so a
+            // checkout without one must not fail the suite.
+            return;
+        }
+        let data = GameData::load_episode(&dir, 1);
+        let start = std::time::Instant::now();
+        const N: u32 = 200;
+        let mut tiles = 0usize;
+        for _ in 0..N {
+            tiles += data.load_level("a1").map(|l| l.tiles.len()).unwrap_or(0);
+        }
+        let each = start.elapsed() / N;
+        println!("load_level(\"a1\") = {each:?} each ({tiles} tiles touched)");
+        println!("  4 calls per tick at 18.2Hz = {:?}/s", each * 4 * 18);
+    }
 }

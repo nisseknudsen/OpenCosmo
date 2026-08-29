@@ -210,19 +210,40 @@ impl InputScript {
 /// The live path just drains `InputAccumulator`, which has been sampling
 /// every frame - see `input.rs` for why the gameplay tick can't read the
 /// keyboard directly.
+/// Where this run's controls come from. Resolved once - probing the
+/// environment every tick allocated two `String`s to answer a question
+/// fixed at launch.
+pub enum InputSource {
+    Live,
+    Script(InputScript),
+    Autoplay,
+}
+
+impl InputSource {
+    pub fn from_env() -> Self {
+        if let Ok(spec) = std::env::var("COSMO_INPUT") {
+            InputSource::Script(InputScript::parse(&spec))
+        } else if std::env::var("COSMO_AUTOPLAY").is_ok() {
+            InputSource::Autoplay
+        } else {
+            InputSource::Live
+        }
+    }
+}
+
 pub fn read_input(
     mut input: ResMut<PlayerInput>,
     mut accum: ResMut<crate::input::InputAccumulator>,
     mut tick: Local<u32>,
-    mut script: Local<Option<InputScript>>,
+    mut source: Local<Option<InputSource>>,
 ) {
-    if let Ok(spec) = std::env::var("COSMO_INPUT") {
-        let script = script.get_or_insert_with(|| InputScript::parse(&spec));
+    let source = source.get_or_insert_with(InputSource::from_env);
+    if let InputSource::Script(script) = source {
         *input = script.at(*tick);
         *tick += 1;
         return;
     }
-    if std::env::var("COSMO_AUTOPLAY").is_ok() {
+    if matches!(source, InputSource::Autoplay) {
         *input = PlayerInput {
             east: true,
             // Tap rather than hold: the jump latch deliberately blocks a
@@ -340,9 +361,7 @@ pub fn move_player_tick(
     if p.dead_timer != 0 {
         return; // frozen during the death animation, game1.c:8452
     }
-    let Some(level) = data.load_level(&level_data.name) else {
-        return;
-    };
+    let level = &level_data.level;
     let mut dummy_cling = false;
     p.move_count = p.move_count.wrapping_add(1);
     p.cling_slip = false;
@@ -729,7 +748,6 @@ pub fn update_frame_and_scroll(
     mut query: Query<&mut Player>,
     input: Res<PlayerInput>,
     level_data: Res<CurrentLevel>,
-    data: Res<GameData>,
     mut scroll: ResMut<crate::camera::Scroll>,
     near_globe: Res<crate::hints::NearHintGlobe>,
     mut sfx: EventWriter<PlaySfx>,
@@ -743,9 +761,7 @@ pub fn update_frame_and_scroll(
         p.frame = frame::DEAD_1 + (p.dead_timer as usize % 2);
         return;
     }
-    let Some(level) = data.load_level(&level_data.name) else {
-        return;
-    };
+    let level = &level_data.level;
     let cling_slip = p.cling_slip;
     let clinging = p.cling_dir.is_some();
 

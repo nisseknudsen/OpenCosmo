@@ -835,9 +835,7 @@ pub fn tick_enemies(
     let Ok(player) = player_q.single() else {
         return;
     };
-    let Some(level) = data.load_level(&level_data.name) else {
-        return;
-    };
+    let level = &level_data.level;
     // Falling off the bottom of the map kills an actor rather than letting
     // it fall forever (game1.c:7849-7852).
     let floor = crate::camera::max_scroll_y(level.width) + crate::camera::SCROLL_H + 3;

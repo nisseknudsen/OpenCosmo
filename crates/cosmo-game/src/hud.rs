@@ -193,16 +193,39 @@ pub fn spawn_hud(
 
 /// Sets each slot to its digit, hiding leading slots that aren't needed.
 /// Slot 0 always shows, so a value of 0 renders as "0" rather than blank.
-fn apply_digits(value: u32, index: usize, image: &mut ImageNode, visibility: &mut Visibility) {
-    let divisor = 10u32.saturating_pow(index as u32);
-    if index > 0 && value < divisor {
-        *visibility = Visibility::Hidden;
+/// Sets an atlas index only when it differs.
+///
+/// Writing through `Mut` marks the component changed whether or not the
+/// value moved, and Bevy's UI re-extracts changed nodes every frame. The
+/// status bar is written from scratch each frame, so assigning
+/// unconditionally dirtied every digit and health cell forever, for a
+/// display that changes a few times a minute. `set_if_neq` is the built-in
+/// for the visibility half of this; the atlas index needs doing by hand
+/// because it sits behind an `Option` inside the component.
+fn set_atlas(image: &mut Mut<ImageNode>, index: usize) {
+    let current = image.texture_atlas.as_ref().map(|a| a.index);
+    if current == Some(index) {
         return;
     }
-    *visibility = Visibility::Inherited;
-    if let Some(atlas) = image.texture_atlas.as_mut() {
-        atlas.index = DIGIT_0 + (value / divisor % 10) as usize;
+    if let Some(atlas) = image.bypass_change_detection().texture_atlas.as_mut() {
+        atlas.index = index;
+        image.set_changed();
     }
+}
+
+fn apply_digits(
+    value: u32,
+    index: usize,
+    image: &mut Mut<ImageNode>,
+    visibility: &mut Mut<Visibility>,
+) {
+    let divisor = 10u32.saturating_pow(index as u32);
+    if index > 0 && value < divisor {
+        visibility.set_if_neq(Visibility::Hidden);
+        return;
+    }
+    visibility.set_if_neq(Visibility::Inherited);
+    set_atlas(image, DIGIT_0 + (value / divisor % 10) as usize);
 }
 
 pub fn update_status_bar(
@@ -244,20 +267,20 @@ pub fn update_status_bar(
         // rest of the pre-spawned slots stay hidden until a power-up
         // widens the meter.
         if cell.index >= player.health_cells as usize {
-            *visibility = Visibility::Hidden;
+            visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        *visibility = Visibility::Inherited;
+        visibility.set_if_neq(Visibility::Inherited);
         let filled = player.health - 1 > cell.index as i32;
-        let index = match (filled, cell.upper) {
-            (true, true) => FONT_UPPER_BAR_1,
-            (true, false) => FONT_LOWER_BAR_1,
-            (false, true) => FONT_UPPER_BAR_0,
-            (false, false) => FONT_LOWER_BAR_0,
-        };
-        if let Some(atlas) = image.texture_atlas.as_mut() {
-            atlas.index = index;
-        }
+        set_atlas(
+            &mut image,
+            match (filled, cell.upper) {
+                (true, true) => FONT_UPPER_BAR_1,
+                (true, false) => FONT_LOWER_BAR_1,
+                (false, true) => FONT_UPPER_BAR_0,
+                (false, false) => FONT_LOWER_BAR_0,
+            },
+        );
     }
 }
 

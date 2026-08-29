@@ -243,13 +243,15 @@ pub fn load_level_into_world(
     level::spawn_level_tiles(commands, tileset, &level, data);
     actors::spawn_level_actors(commands, asset_server, &level, data);
 
+    let (width, height, music) = (level.width, level.height, level.music.clone());
     Some(CurrentLevel {
         name: stem.to_string(),
-        width: level.width,
-        height: level.height,
+        level,
+        width,
+        height,
         content_min: (bounds.0, bounds.1),
         content_max: (bounds.2, bounds.3),
-        music: level.music.clone(),
+        music,
     })
 }
 

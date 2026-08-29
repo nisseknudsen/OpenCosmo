@@ -33,6 +33,32 @@ use screen::{GameState, UiCamera};
 
 const START_LEVEL: &str = "a1";
 
+/// The gameplay tick, in order.
+///
+/// Named sets rather than one long `.chain()`. The chain had to be split in
+/// two to get under Bevy's 20-element tuple limit, and `.chain()` on the
+/// outer tuple only orders the two halves against each other - every
+/// constraint *inside* a half was silently dropped, which went unnoticed
+/// until a position snapshot started running after the movement it was
+/// supposed to precede. Sets cannot fail that way: the ordering is declared
+/// once, and adding a system to a set cannot quietly reorder its
+/// neighbours.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+enum Tick {
+    /// Record where everything was, before anything moves.
+    Snapshot,
+    /// Player and actor movement.
+    Movement,
+    /// Pounces, bombs, blasts, contact damage.
+    Combat,
+    /// Explosions, debris, score pop-ups.
+    Effects,
+    /// Death, pickups, level exits, hint globes.
+    Resolve,
+    /// Sprite frame and scroll position for the tick just simulated.
+    Present,
+}
+
 /// `COSMO_VSYNC=off` uncaps the frame rate.
 ///
 /// Vsync is the right default - it is what stops tearing, and the game's
@@ -98,6 +124,8 @@ fn main() {
         .init_resource::<flow::Score>()
         .init_resource::<flow::Stars>()
         .init_resource::<flow::Checkpoint>()
+        .insert_resource(trace::Hooks::from_env())
+        .insert_resource(motion::MotionOverride::from_env())
         .init_resource::<help::Paused>()
         .init_resource::<audio::AudioMode>()
         .init_resource::<camera::Scroll>()
@@ -145,56 +173,85 @@ fn main() {
                 devmenu::close_level_warp,
             ),
         )
-        .add_systems(
+        .configure_sets(
             FixedUpdate,
             (
-                (
-                    motion::snapshot_positions,
-                    player::move_player_tick,
-                    enemy::move_walkers,
-                    // Runs before hazard_damage so contact tests see this
-                    // tick's positions rather than the previous one's.
-                    enemy_ai::tick_enemies,
-                    // Pounce resolves before contact damage so landing on an
-                    // enemy kills it instead of hurting the player.
-                    combat::pounce_enemies,
-                    combat::pounce_containers,
-                    enemy::hazard_damage,
-                    combat::place_bomb,
-                    combat::tick_bombs,
-                )
-                    .chain(),
-                (
-                    effects::tick_explosions,
-                    combat::explosion_damage,
-                    combat::explosion_bursts_containers,
-                    effects::tick_decorations,
-                    effects::tick_score_effects,
-                    player::update_death,
-                    // Markers follow whatever moved this tick before
-                    // anything tests against them.
-                    actors::sync_actor_positions,
-                    flow::collect_pickups,
-                    flow::check_level_exit,
-                    // Globe proximity is settled before the frame/scroll
-                    // pass, which needs it to know whether looking up pans
-                    // the view or reads the globe.
-                    hints::detect_hint_globe,
-                    player::update_frame_and_scroll,
-                    hints::read_hint_globe,
-                    sfx::play_queued_sfx,
-                )
-                    .chain(),
+                Tick::Snapshot,
+                Tick::Movement,
+                Tick::Combat,
+                Tick::Effects,
+                Tick::Resolve,
+                Tick::Present,
             )
-                // Both halves need `.chain()` of their own. Chaining the
-                // outer tuple only orders the two groups against each other
-                // - the systems *inside* each group are left unordered, so
-                // splitting this chain in two (to get under the 20-element
-                // tuple limit) silently dropped every ordering constraint
-                // within a half.
                 .chain()
                 .after(player::read_input)
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
+        )
+        .add_systems(FixedUpdate, motion::snapshot_positions.in_set(Tick::Snapshot))
+        .add_systems(
+            FixedUpdate,
+            (
+                player::move_player_tick,
+                enemy::move_walkers,
+                // Runs before hazard_damage so contact tests see this
+                // tick's positions rather than the previous one's.
+                enemy_ai::tick_enemies,
+            )
+                .chain()
+                .in_set(Tick::Movement),
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                // Pounce resolves before contact damage so landing on an
+                // enemy kills it instead of hurting the player.
+                combat::pounce_enemies,
+                combat::pounce_containers,
+                enemy::hazard_damage,
+                combat::place_bomb,
+                combat::tick_bombs,
+            )
+                .chain()
+                .in_set(Tick::Combat),
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                effects::tick_explosions,
+                combat::explosion_damage,
+                combat::explosion_bursts_containers,
+                effects::tick_decorations,
+                effects::tick_score_effects,
+            )
+                .chain()
+                .in_set(Tick::Effects),
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                player::update_death,
+                // Markers follow whatever moved this tick before anything
+                // tests against them.
+                actors::sync_actor_positions,
+                flow::collect_pickups,
+                flow::check_level_exit,
+                // Globe proximity is settled before the frame/scroll pass,
+                // which needs it to know whether looking up pans the view
+                // or reads the globe.
+                hints::detect_hint_globe,
+            )
+                .chain()
+                .in_set(Tick::Resolve),
+        )
+        .add_systems(
+            FixedUpdate,
+            (
+                player::update_frame_and_scroll,
+                hints::read_hint_globe,
+                sfx::play_queued_sfx,
+            )
+                .chain()
+                .in_set(Tick::Present),
         )
         // Input and tracing keep running while a text frame is up: a
         // scripted run needs to be able to dismiss one, and a trace that

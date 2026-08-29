@@ -62,9 +62,7 @@ pub fn move_walkers(
     if *tick % 3 != 0 {
         return; // enemies pace slower than the player
     }
-    let Some(level) = data.load_level(&level_data.name) else {
-        return;
-    };
+    let level = &level_data.level;
     for (mut w, mut t) in &mut query {
         let new_x = w.x + w.dir;
         let edge_x = if w.dir > 0 {

@@ -16,6 +16,15 @@ pub struct LevelScoped;
 #[derive(Resource, Default)]
 pub struct CurrentLevel {
     pub name: String,
+    /// The parsed map, kept here rather than re-read per system.
+    ///
+    /// It used to be loaded from disk and deserialised inside every system
+    /// that needed to test a tile - four of them, every tick. That is a
+    /// 96KB file read and a 32768-element parse at 268us a time, so around
+    /// 1.07ms of every tick spent rebuilding something that cannot change
+    /// while a level is being played, plus a quarter of a megabyte of
+    /// allocation churn per tick.
+    pub level: LevelJson,
     pub width: usize,
     pub height: usize,
     /// Tile-space bounding box of actually-populated (non-air) cells; the

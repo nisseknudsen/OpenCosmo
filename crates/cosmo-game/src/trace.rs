@@ -8,16 +8,47 @@ use crate::enemy_ai::Enemy;
 use crate::player::{FaceDir, Player};
 use bevy::prelude::*;
 
-pub fn trace_enabled() -> bool {
-    std::env::var("COSMO_TRACE").is_ok()
+/// Every `COSMO_*` debug hook, resolved once at startup.
+///
+/// These used to be read with `std::env::var` inside the systems - and two
+/// of them inside *run conditions*, which Bevy evaluates every frame. Each
+/// call allocates a `String` and asks the OS for the environment, to answer
+/// a question whose answer cannot change while the process is alive.
+#[derive(Resource, Default)]
+pub struct Hooks {
+    pub trace_every: Option<u32>,
+    pub watch_column: Option<i32>,
+    pub shot_path: Option<String>,
+    pub shot_at: u32,
+    pub shot_raw: bool,
+    pub fps: bool,
+    pub motion_log: bool,
+    pub quit_after: Option<u32>,
 }
 
-fn interval() -> u32 {
-    std::env::var("COSMO_TRACE")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(1)
+impl Hooks {
+    pub fn from_env() -> Self {
+        fn var(name: &str) -> Option<String> {
+            std::env::var(name).ok()
+        }
+        fn num<T: std::str::FromStr>(name: &str) -> Option<T> {
+            var(name).and_then(|v| v.trim().parse().ok())
+        }
+        Hooks {
+            trace_every: var("COSMO_TRACE").map(|v| v.trim().parse().unwrap_or(1).max(1)),
+            watch_column: num::<i32>("COSMO_WATCH"),
+            shot_path: var("COSMO_SHOT"),
+            shot_at: num::<u32>("COSMO_SHOT_AT").unwrap_or(30),
+            shot_raw: var("COSMO_SHOT_RAW").is_some(),
+            fps: var("COSMO_FPS").is_some(),
+            motion_log: var("COSMO_MOTION").is_some(),
+            quit_after: num::<u32>("COSMO_QUIT_AFTER"),
+        }
+    }
+}
+
+pub fn trace_enabled(hooks: Res<Hooks>) -> bool {
+    hooks.trace_every.is_some()
 }
 
 pub fn trace_tick(
@@ -29,10 +60,11 @@ pub fn trace_tick(
     paused: Res<crate::help::Paused>,
     stars: Res<crate::flow::Stars>,
     score: Res<crate::flow::Score>,
+    hooks: Res<Hooks>,
     mut tick: Local<u32>,
 ) {
     *tick += 1;
-    if *tick % interval() != 0 {
+    if *tick % hooks.trace_every.unwrap_or(1) != 0 {
         return;
     }
     let Ok(p) = player_q.single() else {
@@ -41,16 +73,14 @@ pub fn trace_tick(
     let alive = enemies.iter().filter(|e| !e.dead).count();
     // COSMO_WATCH=<x> lists the y of every live actor in that column, for
     // watching a specific one move.
-    if let Ok(col) = std::env::var("COSMO_WATCH") {
-        if let Ok(col) = col.trim().parse::<i32>() {
-            let mut ys: Vec<i32> = enemies
-                .iter()
-                .filter(|e| !e.dead && (e.x - col).abs() <= 2)
-                .map(|e| e.y)
-                .collect();
-            ys.sort_unstable();
-            println!("  watch x={col}: ys={ys:?}");
-        }
+    if let Some(col) = hooks.watch_column {
+        let mut ys: Vec<i32> = enemies
+            .iter()
+            .filter(|e| !e.dead && (e.x - col).abs() <= 2)
+            .map(|e| e.y)
+            .collect();
+        ys.sort_unstable();
+        println!("  watch x={col}: ys={ys:?}");
     }
     println!(
         "t={t} pos=({x},{y}) face={face} frame={frame} scroll=({sx},{sy}) \
@@ -104,23 +134,20 @@ pub fn trace_tick(
 pub fn screenshot_at(
     mut commands: Commands,
     screen: Res<crate::presentation::VirtualScreen>,
+    hooks: Res<Hooks>,
     mut ticks: Local<u32>,
     mut taken: Local<bool>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-    let Ok(path) = std::env::var("COSMO_SHOT") else {
+    let Some(path) = hooks.shot_path.clone() else {
         return;
     };
-    let at: u32 = std::env::var("COSMO_SHOT_AT")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(30);
     *ticks += 1;
-    if *taken || *ticks < at {
+    if *taken || *ticks < hooks.shot_at {
         return;
     }
     *taken = true;
-    let shot = if std::env::var("COSMO_SHOT_RAW").is_ok() {
+    let shot = if hooks.shot_raw {
         Screenshot::image(screen.0.clone())
     } else {
         Screenshot::primary_window()
@@ -135,11 +162,12 @@ pub fn screenshot_at(
 pub fn report_frame_rate(
     time: Res<Time>,
     windows: Query<&Window>,
+    hooks: Res<Hooks>,
     mut frames: Local<u32>,
     mut elapsed: Local<f32>,
     mut worst: Local<f32>,
 ) {
-    if std::env::var("COSMO_FPS").is_err() {
+    if !hooks.fps {
         return;
     }
     let dt = time.delta_secs();
@@ -176,9 +204,10 @@ pub fn report_frame_rate(
 pub fn trace_drawn_position(
     query: Query<(&Transform, &crate::motion::PrevPos, &crate::player::Player)>,
     fixed: Res<Time<bevy::time::Fixed>>,
+    hooks: Res<Hooks>,
     mut frames: Local<u32>,
 ) {
-    if std::env::var("COSMO_MOTION").is_err() {
+    if !hooks.motion_log {
         return;
     }
     *frames += 1;
@@ -196,11 +225,8 @@ pub fn trace_drawn_position(
 
 /// `COSMO_QUIT_AFTER=<ticks>` ends the run on its own, so a verification
 /// command terminates instead of needing to be killed.
-pub fn quit_after(mut ticks: Local<u32>, mut exit: EventWriter<AppExit>) {
-    let Ok(limit) = std::env::var("COSMO_QUIT_AFTER") else {
-        return;
-    };
-    let Ok(limit) = limit.trim().parse::<u32>() else {
+pub fn quit_after(hooks: Res<Hooks>, mut ticks: Local<u32>, mut exit: EventWriter<AppExit>) {
+    let Some(limit) = hooks.quit_after else {
         return;
     };
     *ticks += 1;

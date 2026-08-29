@@ -47,14 +47,27 @@ pub struct PrevScroll {
     pub y: i32,
 }
 
-pub fn interpolation_enabled(mode: Res<PresentationMode>) -> bool {
+/// An explicit `COSMO_SMOOTH_MOTION` override, resolved once. This is a
+/// run condition, so Bevy evaluates it every frame - reading the
+/// environment here allocated a `String` per frame to answer a question
+/// fixed at launch.
+#[derive(Resource, Default)]
+pub struct MotionOverride(pub Option<bool>);
+
+impl MotionOverride {
+    pub fn from_env() -> Self {
+        MotionOverride(match std::env::var("COSMO_SMOOTH_MOTION").as_deref() {
+            Ok("on") => Some(true),
+            Ok("off") => Some(false),
+            _ => None,
+        })
+    }
+}
+
+pub fn interpolation_enabled(mode: Res<PresentationMode>, over: Res<MotionOverride>) -> bool {
     // Part of the remastered feel rather than its own switch, and off in
     // authentic mode - where 18.2Hz motion is the point.
-    match std::env::var("COSMO_SMOOTH_MOTION").as_deref() {
-        Ok("on") => true,
-        Ok("off") => false,
-        _ => *mode == PresentationMode::Remaster,
-    }
+    over.0.unwrap_or(*mode == PresentationMode::Remaster)
 }
 
 /// Runs first in the tick, before anything moves.
