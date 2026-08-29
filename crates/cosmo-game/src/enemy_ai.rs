@@ -76,6 +76,8 @@ pub enum EnemyKind {
     RedJumper,
     /// `ActSmokeEmitter` (game1.c:5598-5611).
     SmokeEmitter,
+    /// `ActDragonfly` (game1.c:4655-4675).
+    Dragonfly,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -197,6 +199,9 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // sets it and is inert scenery, this one leaves it clear and falls.
     // It also spawns one row lower - see Enemy::new.
     (49, EnemyKind::Pyramid, [0, 0, 0, 0, 0]),             // ACT_PYRAMID_FALLING
+    // --- ActDragonfly ---
+    (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
+
     (248, EnemyKind::SmokeEmitter, [0, 0, 0, 0, 1]),       // ACT_SMOKE_EMIT_SMALL
     (249, EnemyKind::SmokeEmitter, [1, 0, 0, 0, 0]),       // ACT_SMOKE_EMIT_LARGE
 ];
@@ -294,17 +299,9 @@ impl Enemy {
             data[3] = y + 3;
             pounce_hits = 0;
         }
-        // Spawn offsets baked into the original's ConstructActor calls.
-        // Both variants below share a kind with a sibling that has no
-        // offset, so they're told apart by d5 rather than by a table column.
-        let mut y = y;
-        let mut x = x;
-        if kind == EnemyKind::Pyramid && data[4] == 0 {
-            y += 1; // ACT_PYRAMID_FALLING (game1.c: `x, y + 1`)
-        }
-        if kind == EnemyKind::FlamePulse && data[4] != 0 {
-            x -= 1; // ACT_FLAME_PULSE_W (game1.c: `x - 1, y`)
-        }
+        // Spawn offsets are applied by the caller from
+        // `actor_flags::ACT_SPAWN_OFFSET`, which covers all 29 of them -
+        // this used to hardcode the two that had been noticed by eye.
         if kind == EnemyKind::SpittingTurret {
             data[2] = x; // d3 = spawn column, the turret's rest position
         }
@@ -807,6 +804,34 @@ fn tick_red_jumper(e: &mut Enemy, player: &Player, level: &LevelJson, data: &Gam
 /// actor does - so it is currently an invisible no-op. That is still the
 /// right rendering: the original never draws the emitter either, and
 /// leaving it out of the table would show a stray sprite instead.
+/// `ActDragonfly` (game1.c:4655-4675). Flies straight along a row and
+/// turns at walls.
+///
+/// It tests the move itself rather than going through `AdjustActorMove`,
+/// so there is no ledge check and no gravity - it is airborne by
+/// construction. That is why the generic walker fallback could not stand in
+/// for it: that one refuses to step where there is no floor, and a
+/// dragonfly in open sky has floor nowhere, so it reversed every tick and
+/// hovered in place.
+fn tick_dragonfly(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    let (w, h) = (e.width_tiles, e.height_tiles);
+    let free = |dir, x: i32| test_sprite_move(dir, x, e.y, w, h, level, data) == MoveResult::Free;
+    if e.d1 != DIR2_WEST {
+        if !free(Dir4::East, e.x + 1) {
+            e.d1 = DIR2_WEST;
+        } else {
+            e.x += 1;
+            e.d2 = if e.d2 == 0 { 1 } else { 0 };
+            e.frame = (e.d2 + 2) as usize;
+        }
+    } else if !free(Dir4::West, e.x - 1) {
+        e.d1 = DIR2_EAST;
+    } else {
+        e.x -= 1;
+        e.frame = usize::from(e.frame == 0);
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -897,6 +922,7 @@ pub fn tick_enemies(
             EnemyKind::SpittingTurret => tick_spitting_turret(&mut e, player),
             EnemyKind::RedJumper => tick_red_jumper(&mut e, player, &level, &data),
             EnemyKind::SmokeEmitter => tick_smoke_emitter(&mut e),
+            EnemyKind::Dragonfly => tick_dragonfly(&mut e, &level, &data),
         }
 
         // Presentation. `frame` is clamped rather than trusted: a few

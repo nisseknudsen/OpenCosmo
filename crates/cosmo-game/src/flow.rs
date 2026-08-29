@@ -12,6 +12,9 @@ use crate::sfx::{snd, PlaySfx};
 use crate::tileset::TilesetAssets;
 use bevy::prelude::*;
 
+/// How long the invincibility bubble lasts (game1.c:5325).
+pub const INVINCIBLE_TICKS: u32 = 240;
+
 #[derive(Resource, Default)]
 pub struct Score(pub u32);
 
@@ -84,7 +87,9 @@ pub fn collect_pickups(
         // Stars and power-ups get the louder jingle (game1.c:7393, 7475);
         // everything else the ordinary pickup blip (game1.c:7500, 7542).
         sfx.write(PlaySfx(match pickup {
-            crate::pickups::Pickup::Star | crate::pickups::Pickup::PowerUp => snd::BIG_PRIZE,
+            crate::pickups::Pickup::Star
+            | crate::pickups::Pickup::PowerUp
+            | crate::pickups::Pickup::Invincibility => snd::BIG_PRIZE,
             _ => snd::PRIZE,
         }));
 
@@ -113,6 +118,14 @@ pub fn collect_pickups(
                 }
                 score.0 += 12800;
                 Some(12800)
+            }
+            crate::pickups::Pickup::Invincibility => {
+                // 240 ticks, the lifetime of the bubble actor
+                // (game1.c:5325). The score effect shows 12800 and awards
+                // nothing, which is the original's own bug.
+                player.invincible_ticks = INVINCIBLE_TICKS;
+                crate::effects::spawn_score_effect(&mut commands, &effects, 12800, c.x, c.y);
+                None
             }
             crate::pickups::Pickup::PowerUp => {
                 // Heals while hurt, otherwise pays out (game1.c:7480-7488).
@@ -221,9 +234,71 @@ impl LevelSequence {
         &self.order[self.index]
     }
 
-    pub fn advance(&mut self) -> String {
-        self.index = (self.index + 1) % self.order.len();
-        self.current().to_string()
+    /// `NextLevel()` (game1.c:9968-10046).
+    ///
+    /// Not simply "the next entry". `order.json` is the level *number*
+    /// table the original indexes with `levelNum`, and the progression runs
+    /// in fours: two main levels, then a pair of bonus stages. Which of
+    /// those you get - if any - depends on how many stars you have
+    /// collected, counted across the whole game rather than per section:
+    ///
+    /// - more than 49 stars: the better of the two bonus stages
+    /// - more than 24: the lesser one
+    /// - otherwise: skipped entirely, straight on to the next section
+    ///
+    /// Advancing by one every time, as this used to, handed out both bonus
+    /// stages unconditionally and never let a section be skipped.
+    ///
+    /// Returns the intermission to show before the next level loads.
+    pub fn advance(&mut self, stars: u32) -> Option<Intermission> {
+        let len = self.order.len();
+        let intermission = match self.index % 4 {
+            // A first level: straight on to the second, no ceremony.
+            0 => {
+                self.index += 1;
+                None
+            }
+            // A second level: the section is over. The bonus stages are
+            // the reward for stars, and are skipped without them.
+            1 => {
+                if stars > 49 {
+                    self.index += 2;
+                } else if stars > 24 {
+                    self.index += 1;
+                } else {
+                    self.index += 3;
+                }
+                Some(Intermission::SectionCompleted)
+            }
+            // The lesser bonus stage falls through to the better one's
+            // case in the original, so both land on the next section.
+            2 => {
+                self.index += 2;
+                Some(Intermission::BonusCompleted)
+            }
+            _ => {
+                self.index += 1;
+                Some(Intermission::BonusCompleted)
+            }
+        };
+        self.index %= len.max(1);
+        intermission
+    }
+}
+
+/// The frame shown between levels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Intermission {
+    SectionCompleted,
+    BonusCompleted,
+}
+
+impl Intermission {
+    pub fn title(self) -> &'static str {
+        match self {
+            Intermission::SectionCompleted => "Section Completed!",
+            Intermission::BonusCompleted => "Bonus Level Completed!!",
+        }
     }
 }
 
@@ -237,7 +312,10 @@ pub fn load_level_into_world(
     tileset: &TilesetAssets,
     stem: &str,
 ) -> Option<CurrentLevel> {
-    let level = data.load_level(stem)?;
+    let mut level = data.load_level(stem)?;
+    // Pedestal caps are solid floor; stamped in before anything reads the
+    // map so collision and rendering agree.
+    actors::apply_pedestal_platforms(&mut level);
     let bounds = level::content_bounds(&level);
     level::spawn_backdrop(commands, asset_server, &level, bounds);
     level::spawn_level_tiles(commands, tileset, &level, data);
@@ -258,16 +336,33 @@ pub fn load_level_into_world(
 /// Raised to move to a *different* level - by reaching an exit, and by the
 /// developer level warp. Distinct from `RestartLevel` in that it takes a
 /// fresh checkpoint on arrival instead of rewinding to the old one.
+/// Raised when a level is beaten. Separate from `EnterLevel` because the
+/// next level must not load until any intermission has been dismissed -
+/// otherwise the frame announcing "Section Completed!" is drawn over the
+/// *next* level rather than the one just finished.
 #[derive(Event)]
-pub struct EnterLevel(pub String);
+pub struct LevelFinished {
+    pub level: String,
+    pub intermission: Option<Intermission>,
+}
+
+#[derive(Event)]
+pub struct EnterLevel {
+    pub level: String,
+}
+
+/// The level waiting behind an open intermission frame.
+#[derive(Resource, Default)]
+pub struct PendingLevel(pub Option<String>);
 
 pub fn check_level_exit(
     exit_q: Query<&ExitTrigger>,
     sign_q: Query<&crate::actors::ExitSign>,
     player_q: Query<&Player>,
     scroll: Res<crate::camera::Scroll>,
+    stars: Res<Stars>,
     mut sequence: ResMut<LevelSequence>,
-    mut enter: EventWriter<EnterLevel>,
+    mut finished: EventWriter<LevelFinished>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -287,7 +382,84 @@ pub fn check_level_exit(
             && s.y < scroll.y + crate::camera::SCROLL_H
     });
     if touching || sign_in_view {
-        enter.write(EnterLevel(sequence.advance()));
+        let intermission = sequence.advance(stars.0);
+        finished.write(LevelFinished {
+            level: sequence.current().to_string(),
+            intermission,
+        });
+    }
+}
+
+/// Marks the between-levels frame.
+#[derive(Component)]
+pub struct IntermissionUi;
+
+/// Shows "Section Completed!" / "Bonus Level Completed!!" over the finished
+/// level and waits for a key (`ShowSectionIntermission`, game1.c:10009 and
+/// 10028). Without it a level simply cut to the next one mid-stride, which
+/// is what made finishing a level feel like a glitch rather than an event.
+#[allow(clippy::too_many_arguments)]
+pub fn show_intermission(
+    mut commands: Commands,
+    mut events: EventReader<LevelFinished>,
+    mut pending: ResMut<PendingLevel>,
+    mut paused: ResMut<crate::help::Paused>,
+    hud: Res<crate::hud::HudAssets>,
+    ui_camera: Res<crate::screen::UiCamera>,
+    mut enter: EventWriter<EnterLevel>,
+    mut sfx: EventWriter<PlaySfx>,
+) {
+    let Some(event) = events.read().last() else {
+        return;
+    };
+    let Some(intermission) = event.intermission else {
+        // Nothing to announce - load straight through.
+        enter.write(EnterLevel {
+            level: event.level.clone(),
+        });
+        return;
+    };
+    sfx.write(PlaySfx(snd::BIG_PRIZE));
+    pending.0 = Some(event.level.clone());
+    paused.0 = true;
+    crate::panel::TextFrame::new(7, 7, 34, intermission.title(), "Press ANY key.")
+        .spawn(&mut commands, &hud, ui_camera.0, IntermissionUi);
+}
+
+/// Any key dismisses it and lets the queued level load.
+pub fn close_intermission(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::player::PlayerInput>,
+    mut paused: ResMut<crate::help::Paused>,
+    mut pending: ResMut<PendingLevel>,
+    mut enter: EventWriter<EnterLevel>,
+    open: Query<Entity, With<IntermissionUi>>,
+) {
+    let pressed = keys.get_just_pressed().next().is_some() || input.dismiss;
+    if open.is_empty() || !pressed {
+        return;
+    }
+    for entity in &open {
+        commands.entity(entity).despawn();
+    }
+    paused.0 = false;
+    if let Some(level) = pending.0.take() {
+        enter.write(EnterLevel { level });
+    }
+}
+
+/// Closes it if the level goes away underneath it.
+pub fn clear_intermission(
+    mut commands: Commands,
+    mut paused: ResMut<crate::help::Paused>,
+    mut pending: ResMut<PendingLevel>,
+    open: Query<Entity, With<IntermissionUi>>,
+) {
+    pending.0 = None;
+    for entity in &open {
+        commands.entity(entity).despawn();
+        paused.0 = false;
     }
 }
 
@@ -307,7 +479,7 @@ pub fn enter_level(
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
 ) {
-    let Some(EnterLevel(next_name)) = events.read().last() else {
+    let Some(EnterLevel { level: next_name }) = events.read().last() else {
         return;
     };
     let Ok(mut player) = player_q.single_mut() else {
@@ -352,6 +524,71 @@ mod tests {
         p.health_cells = cells;
         p.bombs = bombs;
         p
+    }
+
+    fn sequence() -> LevelSequence {
+        LevelSequence {
+            order: (0..12).map(|i| format!("L{i}")).collect(),
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn a_first_level_leads_straight_to_the_second() {
+        let mut s = sequence();
+        assert_eq!(s.advance(0), None, "no ceremony mid-section");
+        assert_eq!(s.index, 1);
+    }
+
+    #[test]
+    fn too_few_stars_skips_the_bonus_stages_entirely() {
+        // game1.c:10042 - `levelNum += 3`, straight past both.
+        let mut s = sequence();
+        s.index = 1;
+        assert_eq!(s.advance(24), Some(Intermission::SectionCompleted));
+        assert_eq!(s.index, 4, "should land on the next section's first level");
+    }
+
+    #[test]
+    fn twenty_five_stars_earns_the_lesser_bonus_stage() {
+        let mut s = sequence();
+        s.index = 1;
+        assert_eq!(s.advance(25), Some(Intermission::SectionCompleted));
+        assert_eq!(s.index, 2);
+    }
+
+    #[test]
+    fn fifty_stars_earns_the_better_one() {
+        let mut s = sequence();
+        s.index = 1;
+        assert_eq!(s.advance(50), Some(Intermission::SectionCompleted));
+        assert_eq!(s.index, 3);
+    }
+
+    #[test]
+    fn either_bonus_stage_leads_to_the_next_section() {
+        // The lesser one falls through the better one's case in the
+        // original, so both end up on the same level.
+        for (from, stars) in [(2usize, 0u32), (3, 0)] {
+            let mut s = sequence();
+            s.index = from;
+            assert_eq!(s.advance(stars), Some(Intermission::BonusCompleted));
+            assert_eq!(s.index, 4, "from bonus slot {from}");
+        }
+    }
+
+    #[test]
+    fn a_full_run_without_stars_never_visits_a_bonus_stage() {
+        let mut s = sequence();
+        let mut visited = vec![s.index];
+        for _ in 0..5 {
+            s.advance(0);
+            visited.push(s.index);
+        }
+        assert!(
+            !visited.iter().any(|i| i % 4 == 2 || i % 4 == 3),
+            "starless run reached a bonus slot: {visited:?}"
+        );
     }
 
     #[test]

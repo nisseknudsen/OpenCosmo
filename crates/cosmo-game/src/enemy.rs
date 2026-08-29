@@ -115,7 +115,11 @@ pub fn hazard_damage(
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
-    if player.dead_timer != 0 {
+    // `HurtPlayer` bails out entirely while invincible (game1.c:6905).
+    if player.invincible_ticks > 0 {
+        player.invincible_ticks -= 1;
+    }
+    if player.dead_timer != 0 || player.is_invincible() {
         return;
     }
     if player.hurt_cooldown > 0 {

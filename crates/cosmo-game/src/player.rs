@@ -72,6 +72,11 @@ pub struct Player {
     /// `idlecount` (game1.c:8440) - how long the player has stood still,
     /// which schedules the blink/look-around/head-shake idle animations.
     pub idle_count: u32,
+    /// `isPlayerInvincible` as a countdown. The original tracks it on the
+    /// bubble actor, which sets the flag every tick it lives and clears it
+    /// at 240 (game1.c:5311-5333); a counter here is the same thing without
+    /// needing the actor to own player state.
+    pub invincible_ticks: u32,
     /// Stand-in for `random()`, used only for idle animation jitter.
     rng: u32,
 }
@@ -99,6 +104,7 @@ impl Player {
             cling_slip: false,
             move_count: 0,
             idle_count: 0,
+            invincible_ticks: 0,
             rng: 0x1337_beef,
         }
     }
@@ -118,6 +124,11 @@ impl Player {
     /// local frame index is taken from (player.h:24-25). The original keeps
     /// this as its own variable but every site in `MovePlayer` moves it in
     /// lockstep with `playerFaceDir`, so it is derived here instead.
+    /// `isPlayerInvincible` (game1.c:6905) - blocks all contact damage.
+    pub fn is_invincible(&self) -> bool {
+        self.invincible_ticks > 0
+    }
+
     pub fn base_frame(&self) -> usize {
         match self.face_dir {
             FaceDir::West => 0,

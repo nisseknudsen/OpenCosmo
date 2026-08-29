@@ -215,8 +215,12 @@ pub fn tick_explosions(
             // next to your own bomb is as dangerous as it should be.
             let blast_w = (sprite.width_px / 8.0).ceil() as i32;
             let blast_h = (sprite.height_px / 8.0).ceil() as i32;
+            // Blast damage goes through the same gate as contact damage:
+            // `HurtPlayer` refuses outright while invincible
+            // (game1.c:6905), so a bubble protects against your own bombs.
             if p.dead_timer == 0
                 && p.hurt_cooldown == 0
+                && !p.is_invincible()
                 && crate::combat::rects_overlap(
                     ex.x,
                     ex.y,
@@ -228,11 +232,15 @@ pub fn tick_explosions(
                     crate::player::PLAYER_HEIGHT,
                 )
             {
+                // Matches HurtPlayer's split: the cooldown and the hurt
+                // sound belong to the *survived* branch, and a fatal hit
+                // goes straight into the death animation.
                 p.health -= 1;
-                sfx.write(PlaySfx(snd::PLAYER_HURT));
-                p.hurt_cooldown = 44;
                 if p.health <= 0 {
                     p.dead_timer = 1;
+                } else {
+                    sfx.write(PlaySfx(snd::PLAYER_HURT));
+                    p.hurt_cooldown = 44;
                 }
             }
         }

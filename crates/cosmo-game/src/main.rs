@@ -136,6 +136,8 @@ fn main() {
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
+        .add_event::<flow::LevelFinished>()
+        .init_resource::<flow::PendingLevel>()
         .add_event::<devmenu::OpenLevelWarp>()
         .init_resource::<sfx::SfxState>()
         .add_event::<sfx::PlaySfx>()
@@ -170,6 +172,7 @@ fn main() {
                 sfx::stop_all_sfx,
                 help::close_help,
                 hints::clear_hints,
+                flow::clear_intermission,
                 devmenu::close_level_warp,
             ),
         )
@@ -307,6 +310,8 @@ fn main() {
                 devmenu::open_level_warp,
                 devmenu::level_warp_input,
                 hints::close_hint,
+                flow::show_intermission,
+                flow::close_intermission,
                 flow::restart_level,
                 flow::enter_level,
             )

@@ -24,6 +24,14 @@ pub enum Pickup {
     Hamburger,
     /// Heals if hurt, otherwise pays out big (game1.c:7474-7488).
     PowerUp,
+    /// Wraps the player in a bubble that makes them untouchable for a
+    /// while (game1.c:7775-7782). The hint globes call this "this shield
+    /// for temporary invincibility".
+    ///
+    /// Awards no score, faithfully: the original spawns a 12800 score
+    /// *effect* over it and never adds the points - a bug in the shipped
+    /// game, flagged as such in cosmore's own comment.
+    Invincibility,
 }
 
 /// `SPR_*` id -> what collecting it does. `None` means "not a pickup".
@@ -33,6 +41,7 @@ pub fn pickup_for_sprite(spr: u16) -> Option<Pickup> {
         28 => Pickup::PowerUp,                // SPR_POWER_UP
         57 => Pickup::Bomb,                   // SPR_BOMB_IDLE
         82 => Pickup::Hamburger,              // SPR_HAMBURGER
+        189 => Pickup::Invincibility,         // SPR_INVINCIBILITY_CUBE
         // Tomatoes, pear, onion.
         32 | 34 | 36 | 38 => Pickup::Score(200),
         // The bulk of the food.
@@ -52,6 +61,13 @@ pub fn pickup_for_sprite(spr: u16) -> Option<Pickup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_invincibility_cube_is_collectible() {
+        // It rendered and animated but had no pickup entry, so it could not
+        // be touched at all - and it is the shield hint 3 talks about.
+        assert_eq!(pickup_for_sprite(189), Some(Pickup::Invincibility));
+    }
 
     #[test]
     fn covers_the_pickups_that_were_previously_missed() {

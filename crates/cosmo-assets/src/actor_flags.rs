@@ -273,6 +273,54 @@ pub const ACT_FLAGS: &[(u16, ActorFlags)] = &[
     (265, ActorFlags { force_active: true, stay_active: false, weighted: false, acrophile: false }), // ACT_EP2_END_LINE
 ];
 
+/// Where an actor is placed relative to the tile the map names, extracted
+/// from the `x`/`y` arguments of the same `ConstructActor` calls.
+///
+/// 29 of them are offset, and honouring only the couple that were noticed
+/// by eye left the rest sitting one to seven tiles away from where the
+/// level author put them - grapes, vines, bananas and berries hanging in
+/// the wrong place, and an ivy plant off by seven.
+pub const ACT_SPAWN_OFFSET: &[(u16, i32, i32)] = &[
+    (4, -4, 0), // ACT_ARROW_PISTON_E
+    (6, -1, 0), // ACT_FIREBALL_E
+    (7, 0, 1), // ACT_HEAD_SWITCH_BLUE
+    (8, 0, 1), // ACT_HEAD_SWITCH_RED
+    (9, 0, 1), // ACT_HEAD_SWITCH_GREEN
+    (10, 0, 1), // ACT_HEAD_SWITCH_YELLOW
+    (42, 0, 1), // ACT_GRN_SLIME_THROB
+    (43, 0, 1), // ACT_GRN_SLIME_DRIP
+    (48, 0, 1), // ACT_PYRAMID_CEIL
+    (49, 0, 1), // ACT_PYRAMID_FALLING
+    (80, 0, 2), // ACT_SHARP_ROBOT_CEIL
+    (84, 0, 2), // ACT_CLAM_PLANT_CEIL
+    (85, 0, 2), // ACT_GRAPES
+    (89, -3, 0), // ACT_SPIKES_W
+    (96, 0, 1), // ACT_EYE_PLANT_CEIL
+    (104, -1, 2), // ACT_PIPE_OUTLET
+    (105, -1, 2), // ACT_PIPE_INLET
+    (112, -3, 0), // ACT_SPIT_WALL_PLANT_W
+    (141, 0, 2), // ACT_RED_BERRIES
+    (145, 0, 7), // ACT_IVY_PLANT
+    (146, 0, 2), // ACT_YEL_FRUIT_VINE
+    (149, -4, 0), // ACT_EXIT_MONSTER_W
+    (202, 0, 2), // ACT_THRUSTER_JET
+    (223, 0, 1), // ACT_BANANAS
+    (233, -1, 0), // ACT_FLAME_PULSE_W
+    (236, 0, 1), // ACT_RED_SLIME_THROB
+    (237, 0, 1), // ACT_RED_SLIME_DRIP
+    (252, 0, 1), // ACT_RED_CRYSTAL_CEIL
+    (265, 0, 3), // ACT_EP2_END_LINE
+];
+
+/// `(dx, dy)` in tiles for an actor id; `(0, 0)` for anything unlisted.
+pub fn spawn_offset(act_id: u16) -> (i32, i32) {
+    ACT_SPAWN_OFFSET
+        .iter()
+        .find(|(id, ..)| *id == act_id)
+        .map(|(_, dx, dy)| (*dx, *dy))
+        .unwrap_or((0, 0))
+}
+
 /// Flags for an actor id. Anything absent from the table is inert scenery
 /// as far as these four are concerned.
 pub fn flags_for(act_id: u16) -> ActorFlags {
@@ -318,6 +366,22 @@ mod tests {
     fn barrels_are_weighted_so_they_sit_on_the_ground() {
         assert!(flags_for(29).weighted, "ACT_BARREL_POWER_UP");
         assert!(flags_for(56).weighted, "ACT_BARREL_BOMB");
+    }
+
+    #[test]
+    fn spawn_offsets_match_the_source() {
+        // A few spot checks against the ConstructActor calls they came from.
+        assert_eq!(spawn_offset(202), (0, 2), "ACT_THRUSTER_JET, game1.c:6166");
+        assert_eq!(spawn_offset(145), (0, 7), "ACT_IVY_PLANT");
+        assert_eq!(spawn_offset(149), (-4, 0), "ACT_EXIT_MONSTER_W, game1.c:6017");
+        assert_eq!(spawn_offset(233), (-1, 0), "ACT_FLAME_PULSE_W");
+        assert_eq!(spawn_offset(49), (0, 1), "ACT_PYRAMID_FALLING");
+    }
+
+    #[test]
+    fn an_actor_with_no_offset_sits_where_the_map_says() {
+        assert_eq!(spawn_offset(264), (0, 0), "ACT_STAR");
+        assert_eq!(spawn_offset(118), (0, 0), "ACT_RED_CHOMPER");
     }
 
     #[test]

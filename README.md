@@ -65,8 +65,12 @@ from source.
   and font. The original's menu also offers Restore/Story/Instructions/
   High Scores/Game Redefine/Ordering Info/BBS/Demo, which depend on
   subsystems this remake hasn't ported, so only working entries are shown.
-- Reaching a level's exit advances to the next stage in the real
-  `A1 A2 bonus1 bonus2 A3 A4 …` progression. Note that the *exit sign* is
+- Reaching a level's exit shows the original's "Section Completed!" /
+  "Bonus Level Completed!!" frame and advances by the original's own rule
+  (`NextLevel`, game1.c:9968-10046) — which runs in fours, two main levels
+  then a pair of bonus stages, and **gates the bonus stages on stars**:
+  more than 49 earns the better one, more than 24 the lesser, and fewer
+  skips them entirely. Note that the *exit sign* is
   the exit in most levels, and its tick function does nothing — the level
   ends from the sprite-keyed interaction switch instead, on the sign coming
   into view.
@@ -75,6 +79,13 @@ from source.
   leading edge instead of walking on top of it. 57% of drawn tiles carry
   the flag; mostly solid terrain, but 2.1% are pure decoration in front of
   the action.
+- Actors are placed at the offsets their `ConstructActor` call specifies —
+  29 of the types sit one to seven tiles from the cell the map names.
+- Pedestals are the column-with-a-platform they are in the original: a
+  stalk 13/19/25 tiles tall with a five-wide cap on top that you can stand
+  on, rather than the cap alone sitting on the floor.
+- The invincibility cube wraps the player in a bubble for 240 ticks, during
+  which nothing — including their own bombs — can hurt them.
 - Actors honour the four flags their `ConstructActor` call carries —
   force-active, stay-active, weighted, acrophile — extracted from the
   source into a table. Between them these define a mechanic: a prize that

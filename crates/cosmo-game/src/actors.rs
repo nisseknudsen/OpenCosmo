@@ -72,6 +72,105 @@ pub const EXIT_ACT_IDS: [u16; 3] = [149, 186, 203];
 pub const ACT_EXIT_SIGN: u16 = 39;
 
 const SPR_HINT_GLOBE: u16 = 125;
+const SPR_PEDESTAL: u16 = 192;
+
+/// `ACT_PEDESTAL_SMALL/MEDIUM/LARGE` and the column height each one passes
+/// to `ActPedestal` as `data1` (game1.c:6129-6137).
+const PEDESTALS: [(u16, i32); 3] = [(190, 13), (191, 19), (192, 25)];
+
+/// The tile a pedestal's cap writes into the map: solid, and never drawn.
+/// `TILE_INVISIBLE_PLATFORM` (graphics.h:121).
+pub const TILE_INVISIBLE_PLATFORM: u16 = 0x0048;
+
+/// Stamps every pedestal's cap into the map as solid floor.
+///
+/// `ActPedestal` does this each frame with `SetMapTileRepeat`
+/// (game1.c:5279). Pedestals never move, so doing it once as the level
+/// loads is equivalent and needs no per-tick map mutation - which the rest
+/// of this port does not have.
+pub fn apply_pedestal_platforms(level: &mut LevelJson) {
+    for a in level.actors.clone() {
+        if a.map_type < 31 {
+            continue;
+        }
+        let Some((_, height)) = PEDESTALS.iter().find(|(id, _)| *id == a.map_type - 31) else {
+            continue;
+        };
+        let cap_row = a.y as i32 - height;
+        if cap_row < 0 {
+            continue;
+        }
+        for i in 0..5 {
+            let x = a.x as i32 - 2 + i;
+            if x < 0 || x >= level.width as i32 {
+                continue;
+            }
+            let idx = cap_row as usize * level.width + x as usize;
+            if let Some(cell) = level.tiles.get_mut(idx) {
+                *cell = TILE_INVISIBLE_PLATFORM;
+            }
+        }
+    }
+}
+
+/// A pedestal: a stalk `height` tiles tall with a five-wide cap on top.
+///
+/// The actor itself is never drawn (`nextDrawMode = DRAW_MODE_HIDDEN`,
+/// game1.c:5272); it draws a column of frame 1 upward from its own tile and
+/// then frame 0 across the top. Rendering it as a single frame-0 sprite at
+/// the actor's own position - which is what this did - put the cap on the
+/// ground with no column under it and nothing to stand on, which is the
+/// "orange bar that does nothing".
+fn spawn_pedestal(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    data: &GameData,
+    x: i32,
+    y: i32,
+    height: i32,
+) {
+    let rel_dir = format!("sprites/actors/{SPR_PEDESTAL}");
+    let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
+        return;
+    };
+    if manifest.frames.len() < 2 {
+        return;
+    }
+    let load = |i: usize| {
+        asset_server.load(crate::data::asset_path(&format!(
+            "{rel_dir}/{}",
+            manifest.frames[i].file
+        )))
+    };
+    let (cap, stalk) = (load(0), load(1));
+
+    for i in 0..height {
+        let pos = tile_topleft_to_center(x as f32, (y - i) as f32, 8.0, 8.0);
+        commands.spawn((
+            Sprite {
+                image: stalk.clone(),
+                ..default()
+            },
+            Transform::from_translation(pos.extend(4.0)),
+            LevelScoped,
+        ));
+    }
+    let cap_meta = &manifest.frames[0];
+    let pos = tile_topleft_to_center(
+        (x - 2) as f32,
+        (y - height) as f32,
+        cap_meta.width_px as f32,
+        cap_meta.height_px as f32,
+    );
+    commands.spawn((
+        Sprite {
+            image: cap,
+            ..default()
+        },
+        Transform::from_translation(pos.extend(4.0)),
+        LevelScoped,
+    ));
+}
 const SPR_EYE_PLANT: u16 = 95;
 
 /// Cycles through `frames[sequence[step]]` on a timer - drives the hint
@@ -299,15 +398,24 @@ pub fn spawn_level_actors(
             .map(|(_, spr, ..)| *spr)
             .unwrap_or(act_type);
 
+        // `ConstructActor` places 29 of the actor types at an offset from
+        // the tile the map names - see `actor_flags::ACT_SPAWN_OFFSET`.
+        let (dx, dy) = cosmo_assets::actor_flags::spawn_offset(act_type);
+        let (ax, ay) = (a.x as i32 + dx, a.y as i32 + dy);
+
         if sprite_type == SPR_HINT_GLOBE {
             // Every ACT_HINT_GLOBE_* draws the same sprite; which message
             // it holds is carried by the actor id alone.
             let hint = crate::hints::hint_number_for_actor(act_type).unwrap_or(0);
-            spawn_hint_globe(commands, asset_server, data, a.x as i32, a.y as i32, hint);
+            spawn_hint_globe(commands, asset_server, data, ax, ay, hint);
+            continue;
+        }
+        if let Some((_, height)) = PEDESTALS.iter().find(|(id, _)| *id == act_type) {
+            spawn_pedestal(commands, asset_server, data, ax, ay, *height);
             continue;
         }
         if sprite_type == SPR_EYE_PLANT {
-            spawn_eye_plant(commands, asset_server, data, a.x as i32, a.y as i32);
+            spawn_eye_plant(commands, asset_server, data, ax, ay);
             continue;
         }
 
@@ -324,8 +432,8 @@ pub fn spawn_level_actors(
             height_px,
         } = frame0;
         let height_tiles = (*height_px as f32 / 8.0).ceil();
-        let top_row = a.y as f32 - height_tiles + 1.0;
-        let pos = tile_topleft_to_center(a.x as f32, top_row, *width_px as f32, *height_px as f32);
+        let top_row = ay as f32 - height_tiles + 1.0;
+        let pos = tile_topleft_to_center(ax as f32, top_row, *width_px as f32, *height_px as f32);
         let mut entity = commands.spawn((
             Sprite {
                 image: asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{file}"))),
@@ -351,32 +459,32 @@ pub fn spawn_level_actors(
                 crate::enemy_ai::Enemy::new(
                     kind,
                     init,
-                    a.x as i32,
-                    a.y as i32,
+                    ax,
+                    ay,
                     (*width_px as f32 / 8.0).ceil() as i32,
                     height_tiles as i32,
                     frames,
                     cosmo_assets::actor_flags::flags_for(act_type),
                 ),
-                crate::motion::PrevPos { x: a.x as i32, y: a.y as i32 },
+                crate::motion::PrevPos { x: ax, y: ay },
             ));
         }
         if act_type == ACT_EXIT_SIGN {
             entity.insert(ExitSign {
-                x: a.x as i32,
-                y: a.y as i32,
+                x: ax,
+                y: ay,
             });
         }
         if EXIT_ACT_IDS.contains(&act_type) {
             entity.insert(ExitTrigger {
-                x: a.x as i32,
-                y: a.y as i32,
+                x: ax,
+                y: ay,
             });
         }
         if crate::pickups::pickup_for_sprite(sprite_type).is_some() {
             entity.insert(Collectible {
-                x: a.x as i32,
-                y: a.y as i32,
+                x: ax,
+                y: ay,
                 spr: sprite_type,
             });
         }
@@ -388,8 +496,8 @@ pub fn spawn_level_actors(
                 // ACT_BASKET_NULL "contains itself" - the game's encoding
                 // for an empty basket; nothing to break out of it.
                 entity.insert(Container {
-                    x: a.x as i32,
-                    y: a.y as i32,
+                    x: ax,
+                    y: ay,
                     contents,
                 });
             }
@@ -397,8 +505,8 @@ pub fn spawn_level_actors(
         if behavior.is_none() && crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
             let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;
             entity.insert(crate::enemy::Walker {
-                x: a.x as i32,
-                y: a.y as i32,
+                x: ax,
+                y: ay,
                 dir: 1,
                 width_tiles,
                 height_tiles: height_tiles as i32,

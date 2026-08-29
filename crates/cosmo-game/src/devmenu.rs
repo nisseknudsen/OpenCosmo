@@ -146,7 +146,10 @@ pub fn level_warp_input(
     paused.0 = false;
     if go {
         sequence.index = cursor.0;
-        enter.write(EnterLevel(sequence.current().to_string()));
+        // A developer warp skips the ceremony.
+        enter.write(EnterLevel {
+            level: sequence.current().to_string(),
+        });
     }
 }
 
