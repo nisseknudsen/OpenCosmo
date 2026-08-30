@@ -115,6 +115,16 @@ Contributions are very welcome. The most valuable and most approachable work is
 porting individual actor behaviours: they're self-contained, precisely specified
 by the decompilation, and the single biggest gap.
 
+Behaviour here is ported from [Cosmore](https://github.com/smitelli/cosmore), a
+decompilation of the original game, and the code cites it by file and line. To
+read along, pull in the reference submodule:
+
+```sh
+git submodule update --init
+```
+
+It is not needed to build or play — only to follow the citations.
+
 See **[docs/development.md](docs/development.md)** for the codebase layout,
 conventions, and the headless testing tools. Opening an issue first saves
 duplicated effort on anything large.

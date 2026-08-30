@@ -13,11 +13,29 @@ Notes for working on OpenCosmo. For setup and play instructions, see the
 - `crates/opencosmo-game/` — the Bevy game. `build.rs` triggers conversion;
   `src/` has a module per subsystem (tileset, level, player, camera, actors,
   flow, hud, …).
-- `reference/cosmore/` — vendored copy of [Cosmore](https://github.com/smitelli/cosmore)
-  (MIT), a decompilation of the original executables. This is the primary
-  source for every format and physics decision here.
+- `reference/cosmore/` — a **git submodule** pointing at
+  [Cosmore](https://github.com/smitelli/cosmore) (MIT), a decompilation of the
+  original executables. This is the primary source for every format and physics
+  decision here. Nothing builds from it, so it is optional — but you want it
+  checked out if you are porting behaviour (see below).
 - `docs/file-formats.md` — every file format and physics constant, with source
   citations and an explicit list of what is confirmed versus still uncertain.
+
+## The Cosmore reference
+
+Around 280 comments in this codebase cite Cosmore by file and line — for
+example `game1.c:9968` for `NextLevel()`. Those line numbers are only
+meaningful against one exact revision, so Cosmore is pinned as a submodule
+rather than linked loosely. Check it out with:
+
+```sh
+git submodule update --init
+```
+
+The pin is upstream commit `80418d1`. The game builds and runs perfectly well
+without it; you only need it to read the source a citation points at, or to
+add new citations. If you bump the pin, re-verify the citations — a line-number
+shift upstream invalidates them silently.
 
 ## How the port works
 
