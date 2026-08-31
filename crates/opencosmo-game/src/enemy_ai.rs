@@ -217,11 +217,19 @@ const ACT_PINK_WORM: u16 = 124;
 /// episodes actually fire.
 pub const ACT_PROJECTILE_W: u16 = 109;
 pub const ACT_PROJECTILE_E: u16 = 110;
+/// The three the spitting turret adds (actor.h:115-117). All five draw the
+/// same sprite and share `ActProjectile`; only `DIRP_*` differs.
+pub const ACT_PROJECTILE_SW: u16 = 66;
+pub const ACT_PROJECTILE_SE: u16 = 67;
+pub const ACT_PROJECTILE_S: u16 = 68;
 /// `ACT_BABY_GHOST` (actor.h:114) - what an egg hatches into.
 const ACT_BABY_GHOST: u16 = 65;
 
 /// `DIRP_*` (def.h:62-66) - the five directions a projectile can take.
 const DIRP_WEST: i32 = 0;
+const DIRP_SOUTHWEST: i32 = 1;
+const DIRP_SOUTH: i32 = 2;
+const DIRP_SOUTHEAST: i32 = 3;
 const DIRP_EAST: i32 = 4;
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -394,6 +402,11 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // --- projectiles and the things that fire them ---
     (109, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_WEST]), // ACT_PROJECTILE_W
     (110, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_EAST]), // ACT_PROJECTILE_E
+    // The turret's three diagonals/downward (game1.c:5792-5798). These are
+    // `weighted` in the original, unlike the flat pair.
+    (66, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_SOUTHWEST]), // ACT_PROJECTILE_SW
+    (67, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_SOUTHEAST]), // ACT_PROJECTILE_SE
+    (68, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_SOUTH]),     // ACT_PROJECTILE_S
     (111, EnemyKind::SpittingWallPlant, [0, 0, 0, 0, 1]),  // ACT_SPIT_WALL_PLANT_E
     (112, EnemyKind::SpittingWallPlant, [0, 0, 0, 0, 0]),  // ACT_SPIT_WALL_PLANT_W
     (127, EnemyKind::SentryRobot, [DIR2_WEST, 0, 0, 0, 4]), // ACT_SENTRY_ROBOT
@@ -1025,9 +1038,8 @@ fn tick_baby_ghost(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `ActSpittingTurret` (game1.c:4164-4236). Tracks the player through five
 /// firing arcs, snapping between two columns as it turns, then rests.
 ///
-/// NOT PORTED: the projectiles themselves. The original spawns an
-/// `ACT_PROJECTILE_*` actor at frames 2/5/8/11/14; actor-spawns-actor isn't
-/// available here, so the turret aims and animates but nothing leaves it.
+/// It fires on frames 2, 5, 8, 11 and 14 - west, south-west, south,
+/// south-east and east - each from an offset that clears its own body.
 fn tick_spitting_turret(e: &mut Enemy, player: &Player) {
     e.d2 -= 1;
     if e.d2 == 0 {
@@ -1035,8 +1047,14 @@ fn tick_spitting_turret(e: &mut Enemy, player: &Player) {
         e.d2 = 3;
         if e.d1 != 3 {
             e.frame += 1;
-            // NOT PORTED: frames 2, 5, 8, 11 and 14 each launch a
-            // projectile west / south-west / south / south-east / east.
+            match e.frame {
+                2 => e.spawns.push((ACT_PROJECTILE_W, e.x - 1, e.y - 1)),
+                5 => e.spawns.push((ACT_PROJECTILE_SW, e.x - 1, e.y + 1)),
+                8 => e.spawns.push((ACT_PROJECTILE_S, e.x + 1, e.y + 1)),
+                11 => e.spawns.push((ACT_PROJECTILE_SE, e.x + 5, e.y + 1)),
+                14 => e.spawns.push((ACT_PROJECTILE_E, e.x + 5, e.y - 1)),
+                _ => {}
+            }
         }
     }
 
@@ -4754,6 +4772,85 @@ mod tests {
                 "facing {facing} fired the wrong way: {fired:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_spitting_turret_fires_where_it_is_aimed() {
+        // The turret picks a frame bank from where the player is, and each
+        // bank fires one direction: level with it means west or east,
+        // below it means one of the three downward shots.
+        let aim = |px: i32, py: i32| -> Vec<u16> {
+            let mut e = Enemy::default_for_test(EnemyKind::SpittingTurret);
+            e.x = 10;
+            e.y = 10;
+            e.d3 = 10;
+            // Start in the rest phase (d1 == 0), where the aiming happens;
+            // dropping straight into a volley would fire the bank it
+            // happened to be left on.
+            e.d2 = 27;
+            let mut p = Player::spawn_at(px, py);
+            p.x = px;
+            p.y = py;
+            let mut fired = Vec::new();
+            for _ in 0..200 {
+                tick_spitting_turret(&mut e, &p);
+                fired.extend(e.spawns.drain(..).map(|(a, ..)| a));
+            }
+            fired.sort_unstable();
+            fired.dedup();
+            fired
+        };
+
+        assert_eq!(aim(2, 10), vec![ACT_PROJECTILE_W], "player west -> west");
+        assert_eq!(aim(40, 10), vec![ACT_PROJECTILE_E], "player east -> east");
+        assert_eq!(aim(2, 20), vec![ACT_PROJECTILE_SW], "below and west -> south-west");
+        assert_eq!(aim(40, 20), vec![ACT_PROJECTILE_SE], "below and east -> south-east");
+        assert_eq!(aim(11, 20), vec![ACT_PROJECTILE_S], "directly below -> south");
+    }
+
+    #[test]
+    fn the_turrets_shots_clear_its_own_body() {
+        // Starting a projectile inside the turret would have it collide
+        // with its own launcher.
+        let mut e = Enemy::default_for_test(EnemyKind::SpittingTurret);
+        e.x = 10;
+        e.y = 10;
+        e.d3 = 10;
+        e.d2 = 27;
+        let mut p = Player::spawn_at(40, 10);
+        p.x = 40;
+        p.y = 10;
+        let mut fired = Vec::new();
+        for _ in 0..200 {
+            tick_spitting_turret(&mut e, &p);
+            fired.append(&mut e.spawns);
+        }
+        assert!(!fired.is_empty());
+        for (act, x, _) in &fired {
+            if *act == ACT_PROJECTILE_E {
+                assert!(*x > e.d3 + 3, "an east shot must clear its width");
+            }
+        }
+    }
+
+    #[test]
+    fn a_diagonal_projectile_travels_on_both_axes() {
+        let scroll = crate::camera::Scroll::default();
+        let mut e = Enemy::default_for_test(EnemyKind::Projectile);
+        e.d5 = DIRP_SOUTHEAST;
+        let (x0, y0) = (e.x, e.y);
+        for _ in 0..5 {
+            tick_projectile(&mut e, &scroll);
+        }
+        assert_eq!((e.x - x0, e.y - y0), (5, 5), "south-east means both");
+
+        let mut s = Enemy::default_for_test(EnemyKind::Projectile);
+        s.d5 = DIRP_SOUTH;
+        let (sx, sy) = (s.x, s.y);
+        for _ in 0..5 {
+            tick_projectile(&mut s, &scroll);
+        }
+        assert_eq!((s.x - sx, s.y - sy), (0, 5), "south means straight down");
     }
 
     #[test]
