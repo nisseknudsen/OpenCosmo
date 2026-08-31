@@ -101,6 +101,18 @@ pub enum EnemyKind {
     HorizontalMover,
     /// `ActPipeEnd` (game1.c:3860-3878) - only the inlet animates.
     PipeEnd,
+    /// `ActHeartPlant` (game1.c:2768-2798).
+    HeartPlant,
+    /// `ActTwoTonsCrusher` (game1.c:2496-2570) - the weight that drops on
+    /// a fixed cycle rather than in response to the player.
+    TwoTonsCrusher,
+    /// `ActStoneHeadCrusher` (game1.c:2598-2652) - the one that *does*
+    /// wait for the player to walk underneath.
+    StoneHeadCrusher,
+    /// `ActSharpRobot` (game1.c:3106-3140) - runs along a ceiling.
+    SharpRobot,
+    /// `ActFlyingWisp` (game1.c:2461-2490).
+    FlyingWisp,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -256,6 +268,12 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // --- ActReciprocatingSpikes: the east-facing variant was simply
     // missing from this table; it is the same behavior (game1.c:5848) ---
     (88, EnemyKind::ReciprocatingSpikes, [1, 0, 0, 0, 0]), // ACT_SPIKES_E_RECIP
+    // --- crushers, plants and ceiling runners (game1.c:5742-5825) ---
+    (55, EnemyKind::HeartPlant, [0, 0, 0, 0, 0]),          // ACT_HEART_PLANT
+    (45, EnemyKind::TwoTonsCrusher, [0, 0, 0, 0, 0]),      // ACT_TWO_TONS_CRUSHER
+    (47, EnemyKind::StoneHeadCrusher, [0, 0, 0, 0, 0]),    // ACT_STONE_HEAD_CRUSHER
+    (80, EnemyKind::SharpRobot, [0, DIR2_WEST, 0, 0, 0]),  // ACT_SHARP_ROBOT_CEIL
+    (44, EnemyKind::FlyingWisp, [0, 0, 0, 0, 0]),          // ACT_FLYING_WISP
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -1198,6 +1216,187 @@ fn tick_pipe_end(e: &mut Enemy) {
     }
 }
 
+/// `ActHeartPlant` (game1.c:2768-2798). Snaps open when the player is
+/// directly above it, then closes again. The lurch is done by nudging the
+/// plant a column sideways on two of its three frames.
+///
+/// NOT PORTED: `SND_PLANT_MOUTH_OPEN`.
+fn tick_heart_plant(e: &mut Enemy, player: &Player) {
+    if e.d1 == 0 && e.y > player.y && e.x == player.x {
+        e.d1 = 1;
+    }
+
+    if e.d1 != 1 {
+        return;
+    }
+
+    e.d2 += 1;
+    if e.d2 != 2 {
+        return;
+    }
+    e.d2 = 0;
+    e.frame += 1;
+
+    if e.frame == 3 {
+        e.d1 = 0;
+        e.frame = 0;
+    }
+    if e.frame == 1 {
+        e.x -= 1;
+    }
+    if e.frame == 2 {
+        e.x += 1;
+    }
+}
+
+/// `ActTwoTonsCrusher` (game1.c:2496-2570). Drops on a twenty-tick timer
+/// regardless of where the player is, accelerating 1/2/4 rows on the way
+/// down and decelerating the same way back up.
+///
+/// NOT PORTED: the impact sound, and the separate base sprite the original
+/// draws three rows below itself.
+fn tick_two_tons_crusher(e: &mut Enemy) {
+    if e.d1 < 20 {
+        e.d1 += 1;
+    }
+    if e.d1 == 19 {
+        e.d2 = 1;
+    }
+
+    if e.d2 == 1 {
+        if e.frame < 3 {
+            e.frame += 1;
+            e.d3 = match e.frame {
+                1 => 1,
+                2 => 2,
+                _ => 4,
+            };
+            e.y += e.d3;
+        } else {
+            e.d2 = 2;
+        }
+    }
+
+    if e.d2 == 2 {
+        if e.frame > 0 {
+            e.frame -= 1;
+            e.d3 = match e.frame {
+                0 => 1,
+                1 => 2,
+                _ => 4,
+            };
+            e.y -= e.d3;
+        } else {
+            e.d2 = 0;
+            e.d1 = 0;
+            e.d3 = 0;
+        }
+    }
+}
+
+/// `ActStoneHeadCrusher` (game1.c:2598-2652). Waits for the player to pass
+/// underneath, drops two rows a tick until it lands, then climbs back to
+/// where it started at half speed.
+///
+/// NOT PORTED: the impact sound and smoke puffs.
+fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    e.d4 = i32::from(e.d4 == 0);
+
+    let blocked = |e: &Enemy, level: &LevelJson, data: &GameData| {
+        test_sprite_move(Dir4::South, e.x, e.y, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free
+    };
+
+    if e.d1 == 0 {
+        // The trigger box is deliberately wide - seven columns, offset so
+        // it leads the head slightly (game1.c:2605).
+        if e.y < player.y && e.x <= player.x + 6 && e.x + 7 > player.x {
+            e.d1 = 1;
+            e.d2 = e.y; // the row to climb back to
+            e.frame = 1;
+        } else {
+            e.frame = 0;
+        }
+    } else if e.d1 == 1 {
+        e.frame = 1;
+        e.y += 1;
+        if blocked(e, level, data) {
+            e.d1 = 2;
+            e.y -= 1;
+        } else {
+            // It falls a second row in the same tick, testing again.
+            e.y += 1;
+            if blocked(e, level, data) {
+                e.d1 = 2;
+                e.y -= 1;
+            }
+        }
+    } else if e.d1 == 2 {
+        e.frame = 0;
+        if e.y == e.d2 {
+            e.d1 = 0;
+        } else if e.d4 != 0 {
+            e.y -= 1;
+        }
+    }
+}
+
+/// `ActSharpRobot` (game1.c:3106-3140). Runs along the underside of a
+/// ceiling, turning both at a wall and at the end of the ceiling - the
+/// second test is what stops it running off into open air.
+fn tick_sharp_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.d3 = i32::from(e.d3 == 0);
+    if e.d3 == 0 {
+        return;
+    }
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    } else {
+        let (step, dir) = if e.d2 == DIR2_EAST { (1, Dir4::East) } else { (-1, Dir4::West) };
+        let ahead = test_sprite_move(
+            dir, e.x + step, e.y, e.width_tiles, e.height_tiles, level, data,
+        );
+        let ceiling = test_sprite_move(
+            dir, e.x + step, e.y - 1, e.width_tiles, e.height_tiles, level, data,
+        );
+        if ahead != MoveResult::Free || ceiling == MoveResult::Free {
+            e.d4 = 4;
+            e.d2 = if e.d2 == DIR2_EAST { DIR2_WEST } else { DIR2_EAST };
+        } else {
+            e.x += step;
+        }
+    }
+
+    e.frame = usize::from(e.frame == 0);
+}
+
+/// `ActFlyingWisp` (game1.c:2461-2490). A 64-tick loop: still, then a slow
+/// climb, then a faster drop back, flipped on the way down.
+fn tick_flying_wisp(e: &mut Enemy) {
+    e.frame = usize::from(e.frame == 0);
+
+    if e.d1 < 63 {
+        e.d1 += 1;
+    } else {
+        e.d1 = 0;
+    }
+
+    if e.d1 > 50 {
+        e.y += 2;
+        if e.d1 < 55 {
+            e.y -= 1;
+        }
+    } else if e.d1 > 34 {
+        if e.d1 < 47 {
+            e.y -= 1;
+        }
+        if e.d1 < 45 {
+            e.y -= 1;
+        }
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -1296,6 +1495,13 @@ pub fn tick_enemies(
             EnemyKind::VerticalMover => tick_vertical_mover(&mut e, &level, &data),
             EnemyKind::HorizontalMover => tick_horizontal_mover(&mut e, &level, &data),
             EnemyKind::PipeEnd => tick_pipe_end(&mut e),
+            EnemyKind::HeartPlant => tick_heart_plant(&mut e, player),
+            EnemyKind::TwoTonsCrusher => tick_two_tons_crusher(&mut e),
+            EnemyKind::StoneHeadCrusher => {
+                tick_stone_head_crusher(&mut e, player, &level, &data)
+            }
+            EnemyKind::SharpRobot => tick_sharp_robot(&mut e, &level, &data),
+            EnemyKind::FlyingWisp => tick_flying_wisp(&mut e),
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -1364,6 +1570,8 @@ fn flips_vertically(e: &Enemy) -> bool {
         // The ceiling-mounted eye plant is the floor one upside down
         // (game1.c:5874).
         EnemyKind::EyePlant => e.d5 == DRAW_MODE_FLIPPED,
+        // The wisp flips for the falling half of its loop (game1.c:2478).
+        EnemyKind::FlyingWisp => e.d1 > 50,
         // ActPyramid (game1.c:2661-2662) flips the floor-mounted variant.
         EnemyKind::Pyramid => e.d5 != 0,
         // ActJumpPad (game1.c:2038) flips the ceiling-mounted variant.
@@ -2157,6 +2365,127 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn the_two_tons_crusher_returns_to_its_rest_height() {
+        // It accelerates 1/2/4 down and decelerates the same way up, so the
+        // two halves must cancel exactly or it would walk down the screen.
+        let mut e = Enemy::default_for_test(EnemyKind::TwoTonsCrusher);
+        let rest = e.y;
+        let mut lowest = e.y;
+        for _ in 0..200 {
+            tick_two_tons_crusher(&mut e);
+            lowest = lowest.max(e.y);
+        }
+        assert_eq!(e.y % 7, rest % 7, "the cycle must be closed");
+        assert_eq!(lowest - rest, 7, "it drops seven rows: 1 + 2 + 4");
+    }
+
+    #[test]
+    fn the_stone_head_waits_for_the_player_then_drops() {
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::StoneHeadCrusher);
+        e.x = 2;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        // Player nowhere near: it stays put.
+        let away = Player::spawn_at(40, 3);
+        for _ in 0..20 {
+            tick_stone_head_crusher(&mut e, &away, &level, &data);
+        }
+        assert_eq!(e.y, 0, "it should not drop with nobody underneath");
+
+        // Player underneath: it falls to the floor, then climbs home.
+        let mut under = Player::spawn_at(3, 3);
+        under.x = 3;
+        under.y = 3;
+        let mut lowest = e.y;
+        for _ in 0..10 {
+            tick_stone_head_crusher(&mut e, &under, &level, &data);
+            lowest = lowest.max(e.y);
+        }
+        assert!(lowest > 0, "it should have dropped");
+        assert!(lowest < 4, "and stopped on the floor, not through it");
+        for _ in 0..40 {
+            tick_stone_head_crusher(&mut e, &away, &level, &data);
+        }
+        assert_eq!(e.y, 0, "it should climb back to where it started");
+    }
+
+    #[test]
+    fn the_heart_plant_only_opens_for_a_player_overhead() {
+        let mut e = Enemy::default_for_test(EnemyKind::HeartPlant);
+        e.x = 10;
+        e.y = 10;
+        let mut beside = Player::spawn_at(4, 4);
+        beside.x = 4;
+        beside.y = 4;
+        for _ in 0..20 {
+            tick_heart_plant(&mut e, &beside);
+        }
+        assert_eq!(e.frame, 0, "it stays shut for a player off to the side");
+
+        let mut above = Player::spawn_at(10, 4);
+        above.x = 10;
+        above.y = 4;
+        let mut opened = false;
+        for _ in 0..240 {
+            tick_heart_plant(&mut e, &above);
+            opened |= e.frame > 0;
+            // The lurch is a column left on frame 1 and back on frame 2.
+            // Over many open/close cycles that must not accumulate - a
+            // plant that drifted would crawl across the level.
+            assert!(
+                (9..=10).contains(&e.x),
+                "the plant drifted to column {}",
+                e.x
+            );
+        }
+        assert!(opened, "it should open for a player directly above");
+    }
+
+    #[test]
+    fn the_sharp_robot_stays_under_its_ceiling() {
+        // A ceiling that runs out: the robot must turn at the gap rather
+        // than carry on into open air.
+        let (level, data) = world(&[
+            "#####...",
+            "........",
+            "........",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::SharpRobot);
+        e.x = 1;
+        e.y = 1;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d2 = DIR2_EAST;
+        for _ in 0..120 {
+            tick_sharp_robot(&mut e, &level, &data);
+            assert!(
+                (0..5).contains(&e.x),
+                "it ran out from under the ceiling to x={}",
+                e.x
+            );
+        }
+    }
+
+    #[test]
+    fn the_flying_wisp_loops_back_to_its_start() {
+        let mut e = Enemy::default_for_test(EnemyKind::FlyingWisp);
+        let start = e.y;
+        for _ in 0..64 {
+            tick_flying_wisp(&mut e);
+        }
+        assert_eq!(e.y, start, "a 64-tick loop must close");
     }
 
     /// An eye plant far from any wall, so only the player's column matters.
