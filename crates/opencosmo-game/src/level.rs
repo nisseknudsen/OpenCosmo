@@ -353,3 +353,224 @@ pub fn find_player_start(level: &LevelJson) -> (f32, f32) {
         .map(|a| (a.x as f32, a.y as f32))
         .unwrap_or((2.0, 2.0))
 }
+
+/// Builds every light in the level: the cone's own cell with its ramp,
+/// then straight down until a floor stops it or the cast distance runs out
+/// (game1.c:1745-1755).
+pub fn spawn_level_lights(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    level: &LevelJson,
+    data: &GameData,
+) {
+    let reach = light_cast_distance(data.episode);
+    // One image per shape, shared by every cone that uses it.
+    let handles: Vec<Handle<Image>> = [LightSide::West, LightSide::Middle, LightSide::East]
+        .into_iter()
+        .map(|s| images.add(s.image()))
+        .collect();
+    let full = handles[1].clone();
+
+    for a in &level.actors {
+        let side = match a.map_type {
+            6 => LightSide::West,
+            7 => LightSide::Middle,
+            8 => LightSide::East,
+            _ => continue,
+        };
+        let (x, y) = (a.x as i32, a.y as i32);
+        let mut cell = |image: Handle<Image>, x: i32, y: i32| {
+            commands.spawn((
+                Sprite { image, ..default() },
+                Transform::from_translation(
+                    tile_topleft_to_center(x as f32, y as f32, TILE_PX, TILE_PX).extend(LIGHT_Z),
+                ),
+                LightCone { x, y, side },
+                LevelScoped,
+            ));
+        };
+        cell(handles[side as usize].clone(), x, y);
+
+        // The cone below is always full-width; only the source cell is
+        // ramped.
+        for row in (y + 1)..(y + reach) {
+            if row < 0 || row as usize >= level.height {
+                break;
+            }
+            if data.tile_attr(level.tile_at(x.max(0) as usize, row as usize))
+                & crate::data::TILE_ATTR_BLOCK_SOUTH
+                != 0
+            {
+                break;
+            }
+            cell(full.clone(), x, row);
+        }
+    }
+}
+
+/// Above the foreground tiles: a light falls on what is drawn, including
+/// the layer that covers the player.
+const LIGHT_Z: f32 = 13.0;
+
+/// Hides every cone while the lights are switched off (game1.c:1721).
+pub fn apply_light_switch(
+    switches: Res<crate::enemy_ai::SwitchState>,
+    mut cones: Query<&mut Visibility, With<LightCone>>,
+) {
+    let want = if switches.lights_active {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut vis in &mut cones {
+        vis.set_if_neq(want);
+    }
+}
+
+/// A light cone cast by `SPA_LIGHT_*` (map_type 6-8).
+///
+/// The original does not draw a sprite for these: `LightenScreenTile`
+/// (lowlevel.asm:704) sets the EGA intensity bit on plane 3 of the tile
+/// already on screen, brightening whatever is behind it. The two edge
+/// variants ramp that in over eight rows, which is what gives a cone its
+/// sloped sides (lowlevel.asm:626, and the mirrored east version).
+///
+/// Reproduced here by compositing white additively rather than by
+/// remapping each colour to its high-intensity twin. On the EGA palette
+/// those are close - every colour's bright form is the same hue lit - but
+/// it is an approximation, not the hardware operation.
+#[derive(Component)]
+pub struct LightCone {
+    pub x: i32,
+    pub y: i32,
+    pub side: LightSide,
+}
+
+/// `LIGHT_SIDE_*` (def.h:107-109).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LightSide {
+    West = 0,
+    Middle = 1,
+    East = 2,
+}
+
+impl LightSide {
+    /// The eight row masks the assembly writes into the EGA bit mask
+    /// register, as leftmost-pixel-first booleans.
+    fn row_mask(self, row: usize) -> [bool; 8] {
+        let mut out = [false; 8];
+        match self {
+            // Full brightness everywhere.
+            LightSide::Middle => out = [true; 8],
+            // 00000001b .. 11111111b - fills in from the east edge, so the
+            // cone's west boundary slopes away downward.
+            LightSide::West => {
+                for i in 0..=row {
+                    out[7 - i] = true;
+                }
+            }
+            // 10000000b .. 11111111b - the mirror.
+            LightSide::East => {
+                for i in 0..=row {
+                    out[i] = true;
+                }
+            }
+        }
+        out
+    }
+
+    /// An 8x8 RGBA image of the ramp, white where the mask is set.
+    fn image(self) -> Image {
+        let mut px = vec![0u8; 8 * 8 * 4];
+        for row in 0..8 {
+            let mask = self.row_mask(row);
+            for (col, lit) in mask.iter().enumerate() {
+                if *lit {
+                    let i = (row * 8 + col) * 4;
+                    px[i] = 255;
+                    px[i + 1] = 255;
+                    px[i + 2] = 255;
+                    px[i + 3] = LIGHT_ALPHA;
+                }
+            }
+        }
+        Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            px,
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+}
+
+/// How strongly a lit cell is brightened. The hardware sets one palette
+/// bit, which is a large jump; this is tuned to read as a light cone
+/// without washing out the artwork underneath.
+const LIGHT_ALPHA: u8 = 56;
+
+/// `LIGHT_CAST_DISTANCE` (episode1.h:20, episode2.h:20, episode3.h:20).
+/// Episode 1 casts eleven rows, the later two thirteen.
+pub fn light_cast_distance(episode: u8) -> i32 {
+    if episode == 1 {
+        11
+    } else {
+        13
+    }
+}
+
+#[cfg(test)]
+mod light_tests {
+    use super::*;
+
+    #[test]
+    fn the_middle_of_a_cone_is_fully_lit() {
+        for row in 0..8 {
+            assert_eq!(LightSide::Middle.row_mask(row), [true; 8]);
+        }
+    }
+
+    #[test]
+    fn the_cone_edges_ramp_in_opposite_directions() {
+        // Transcribed from the EGA bit masks: west fills from the east
+        // edge (00000001b upward), east from the west edge (10000000b).
+        // Mirroring these the wrong way puts the slope on the wrong side
+        // of every light in the game.
+        assert_eq!(
+            LightSide::West.row_mask(0),
+            [false, false, false, false, false, false, false, true],
+            "the west edge starts as a single lit pixel on the right"
+        );
+        assert_eq!(
+            LightSide::East.row_mask(0),
+            [true, false, false, false, false, false, false, false],
+            "and the east edge on the left"
+        );
+        // Both are full by the last row.
+        assert_eq!(LightSide::West.row_mask(7), [true; 8]);
+        assert_eq!(LightSide::East.row_mask(7), [true; 8]);
+        // ...and each one widens by exactly one pixel per row.
+        for row in 0..8 {
+            assert_eq!(
+                LightSide::West.row_mask(row).iter().filter(|b| **b).count(),
+                row + 1
+            );
+            assert_eq!(
+                LightSide::East.row_mask(row).iter().filter(|b| **b).count(),
+                row + 1
+            );
+        }
+    }
+
+    #[test]
+    fn episode_one_casts_shorter_than_the_others() {
+        // episode1.h:20 against episode2.h:20 and episode3.h:20.
+        assert_eq!(light_cast_distance(1), 11);
+        assert_eq!(light_cast_distance(2), 13);
+        assert_eq!(light_cast_distance(3), 13);
+    }
+}

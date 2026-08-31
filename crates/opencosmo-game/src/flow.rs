@@ -176,6 +176,7 @@ pub fn restart_level(
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
     mut tile_index: ResMut<level::TileIndex>,
     mut switches: ResMut<crate::enemy_ai::SwitchState>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     if events.read().next().is_none() {
         return;
@@ -188,7 +189,7 @@ pub fn restart_level(
     }
     let name = current.name.clone();
     if let Some(reloaded) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &mut images, &name)
     {
         *current = reloaded;
     }
@@ -314,6 +315,7 @@ pub fn load_level_into_world(
     tileset: &TilesetAssets,
     tile_index: &mut level::TileIndex,
     switches: &mut crate::enemy_ai::SwitchState,
+    images: &mut Assets<Image>,
     stem: &str,
 ) -> Option<CurrentLevel> {
     let mut level = data.load_level(stem)?;
@@ -324,6 +326,7 @@ pub fn load_level_into_world(
     let bounds = level::content_bounds(&level);
     level::spawn_backdrop(commands, asset_server, &level, bounds);
     level::spawn_level_tiles(commands, tileset, &level, data, tile_index);
+    level::spawn_level_lights(commands, images, &level, data);
     actors::spawn_level_actors(commands, asset_server, &level, data);
 
     let (width, height, music) = (level.width, level.height, level.music.clone());
@@ -488,6 +491,7 @@ pub fn enter_level(
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
     mut tile_index: ResMut<level::TileIndex>,
     mut switches: ResMut<crate::enemy_ai::SwitchState>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let Some(EnterLevel { level: next_name }) = events.read().last() else {
         return;
@@ -501,7 +505,7 @@ pub fn enter_level(
     }
 
     let Some(new_current) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, next_name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &mut images, next_name)
     else {
         return;
     };

@@ -267,6 +267,7 @@ fn main() {
                 enemy_ai::draw_force_field_beams,
                 enemy_ai::run_transporters,
                 enemy_ai::run_pipes,
+                level::apply_light_switch,
                 enemy_ai::finish_on_boss_defeat,
             )
                 .chain()
@@ -440,6 +441,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    mut images: ResMut<Assets<Image>>,
     mut switches: ResMut<enemy_ai::SwitchState>,
     mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
@@ -460,6 +462,7 @@ fn setup_game(
         &tileset_assets,
         &mut tile_index,
         &mut switches,
+        &mut images,
         &start_level,
     )
     .expect("start level missing from generated assets");
