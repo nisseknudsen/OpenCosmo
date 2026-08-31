@@ -83,6 +83,9 @@ pub struct Player {
     /// movement commands are ignored, which is what `blockMovementCmds`
     /// does there.
     pub push: Option<Push>,
+    /// `isPlayerInPipe` - riding the pipe network. The player is drawn
+    /// hidden and cannot be hurt while inside one (game1.c:6905).
+    pub in_pipe: bool,
     /// A head-shake queued by something that disorients: leaving a pipe,
     /// a transporter, a hard landing. It only starts once the player is
     /// back on the ground (game1.c:9135).
@@ -167,6 +170,7 @@ impl Player {
             idle_count: 0,
             invincible_ticks: 0,
             push: None,
+            in_pipe: false,
             dizzy_queued: false,
             dizzy_left: 0,
             block_action: false,
@@ -195,8 +199,10 @@ impl Player {
     /// this as its own variable but every site in `MovePlayer` moves it in
     /// lockstep with `playerFaceDir`, so it is derived here instead.
     /// `isPlayerInvincible` (game1.c:6905) - blocks all contact damage.
+    /// `HurtPlayer` bails on any of these (game1.c:6905) - riding a pipe
+    /// is as safe as the invincibility bubble.
     pub fn is_invincible(&self) -> bool {
-        self.invincible_ticks > 0
+        self.invincible_ticks > 0 || self.in_pipe
     }
 
     pub fn base_frame(&self) -> usize {
@@ -1006,6 +1012,18 @@ pub fn update_death(
     if p.dead_timer > 36 {
         p.dead_timer = 0;
         restart.write(crate::flow::RestartLevel);
+    }
+}
+
+/// `PLAYER_HIDDEN` (player.h:54): a player riding a pipe is not drawn.
+pub fn sync_player_visibility(mut query: Query<(&Player, &mut Visibility)>) {
+    for (p, mut vis) in &mut query {
+        let want = if p.in_pipe {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        vis.set_if_neq(want);
     }
 }
 
