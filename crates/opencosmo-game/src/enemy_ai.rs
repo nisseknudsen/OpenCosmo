@@ -128,7 +128,20 @@ pub enum EnemyKind {
     WormCrate,
     /// `ActSplittingPlatform` (game1.c:3354-3410).
     SplittingPlatform,
+    /// `ActDoor` (game1.c:2174-2188) - stamps itself into the map as solid
+    /// until its switch is hit.
+    Door,
+    /// `ActRocket` (game1.c:5179-5262).
+    Rocket,
+    /// `ActJumpPadRobot` (game1.c:2194-2222).
+    JumpPadRobot,
+    /// `ActIvyPlant` (game1.c:4774-4812).
+    IvyPlant,
 }
+
+/// `TILE_DOOR_BLOCK` (graphics.h:129) - what a locked door writes over
+/// itself to become solid.
+const TILE_DOOR_BLOCK: u16 = 0x3dc8;
 
 /// Map tiles these behaviors write (graphics.h:120-130).
 const TILE_EMPTY: u16 = 0x0000;
@@ -319,6 +332,16 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // --- behaviors that write to the map (game1.c:5858, 5954) ---
     (130, EnemyKind::WormCrate, [0, 0, 0, 0, 0]),          // ACT_WORM_CRATE
     (91, EnemyKind::SplittingPlatform, [0, 0, 0, 0, 0]),   // ACT_SPLITTING_PLATFORM
+    // --- doors (game1.c:5652): all four colours share the behavior; the
+    // colour only matters to the switch that opens them, unported ---
+    (11, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_BLUE
+    (12, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_RED
+    (13, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_GREEN
+    (14, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_YELLOW
+    // --- game1.c:6124, 5673, 6005 ---
+    (188, EnemyKind::Rocket, [60, 10, 0, 0, 0]),           // ACT_ROCKET
+    (16, EnemyKind::JumpPadRobot, [0, DIR2_WEST, 0, 0, 0]), // ACT_JUMP_PAD_ROBOT
+    (145, EnemyKind::IvyPlant, [5, 0, 0, 7, 0]),           // ACT_IVY_PLANT
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -1730,6 +1753,129 @@ fn tick_splitting_platform(e: &mut Enemy, player: &Player) {
     }
 }
 
+/// `ActDoor` (game1.c:2174-2188). Writes five rows of solid door tile up
+/// its own column on the first tick and then does nothing - the door *is*
+/// the map change, which is why walking into one is stopped by ordinary
+/// tile collision rather than by any actor test.
+///
+/// NOT PORTED: `UpdateDoors` restoring the tiles it overwrote when the
+/// matching head switch is pounced. The original saves them in data1..5
+/// for exactly that; without the switch the door simply stays locked.
+fn tick_door(e: &mut Enemy) {
+    if e.d1 != 0 {
+        return;
+    }
+    e.d1 = 1;
+    for y in 0..5 {
+        e.tile_writes.push((e.x + 1, e.y - y, TILE_DOOR_BLOCK));
+    }
+}
+
+/// `ActRocket` (game1.c:5179-5262). Sits on a sixty-tick fuse, then climbs
+/// until it hits a ceiling and destroys itself. Riding it is the point:
+/// the original shoves the player up with it, which needs player state the
+/// port does not have, so this flies without a passenger.
+///
+/// NOT PORTED: the exhaust smoke, the sounds, the shards and the two
+/// explosions it leaves, and carrying the player.
+fn tick_rocket(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d1 != 0 {
+        e.d1 -= 1;
+        return;
+    }
+
+    if e.d2 != 0 {
+        if e.d2 > 1 {
+            e.d2 -= 1;
+        }
+        // Below ten it climbs a row a tick, and below five a second row in
+        // the same tick - which is the acceleration off the pad.
+        for _ in 0..2 {
+            if e.d2 >= 10 {
+                break;
+            }
+            if e.d2 < 10 {
+                if test_sprite_move(
+                    Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data,
+                ) == MoveResult::Free
+                {
+                    e.y -= 1;
+                } else {
+                    e.d5 = 1;
+                }
+            }
+            if e.d2 >= 5 {
+                break;
+            }
+        }
+        e.d4 = i32::from(e.d4 == 0);
+    }
+
+    if e.d5 != 0 {
+        e.dead = true;
+    }
+}
+
+/// `ActJumpPadRobot` (game1.c:2194-2222). Paces, and holds a crouched
+/// frame for `data1` ticks after it has been bounced on.
+fn tick_jump_pad_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d1 > 0 {
+        e.frame = 2;
+        e.d1 -= 1;
+        return;
+    }
+
+    e.frame = usize::from(e.frame == 0);
+    if e.d2 != DIR2_WEST {
+        e.x += 1;
+        adjust_actor_move(e, Dir4::East, level, data);
+        if !e.east_free {
+            e.d2 = DIR2_WEST;
+        }
+    } else {
+        e.x -= 1;
+        adjust_actor_move(e, Dir4::West, level, data);
+        if !e.west_free {
+            e.d2 = DIR2_EAST;
+        }
+    }
+}
+
+/// `ActIvyPlant` (game1.c:4774-4812). Idles for `data1` ticks, then climbs
+/// its seven rows one at a time, animating as it goes. A blast sends it
+/// back down.
+///
+/// NOT PORTED: `SND_IVY_PLANT_RISE`.
+fn tick_ivy_plant(e: &mut Enemy) {
+    if e.d2 != 0 {
+        // Falling back down after a blast.
+        e.y += 1;
+        e.d4 += 1;
+        if e.d4 == 7 {
+            e.d2 = 0;
+            e.d3 = 0;
+            e.d1 = 12;
+        }
+        return;
+    }
+
+    if e.d3 < e.d1 {
+        e.d3 += 1;
+        return;
+    }
+
+    e.d5 = i32::from(e.d5 == 0);
+    e.frame += 1;
+    if e.frame == 4 {
+        e.frame = 0;
+    }
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+        e.y -= 1;
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -1842,6 +1988,10 @@ pub fn tick_enemies(
             EnemyKind::JumpingBullet => tick_jumping_bullet(&mut e),
             EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
             EnemyKind::SplittingPlatform => tick_splitting_platform(&mut e, player),
+            EnemyKind::Door => tick_door(&mut e),
+            EnemyKind::Rocket => tick_rocket(&mut e, &level, &data),
+            EnemyKind::JumpPadRobot => tick_jump_pad_robot(&mut e, &level, &data),
+            EnemyKind::IvyPlant => tick_ivy_plant(&mut e),
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -2749,6 +2899,78 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn a_door_makes_itself_solid_once_and_only_once() {
+        let mut e = Enemy::default_for_test(EnemyKind::Door);
+        e.x = 4;
+        e.y = 9;
+        tick_door(&mut e);
+        assert_eq!(
+            e.tile_writes,
+            (0..5).map(|y| (5, 9 - y, TILE_DOOR_BLOCK)).collect::<Vec<_>>(),
+            "a door is five rows of solid tile in the column beside it"
+        );
+        e.tile_writes.clear();
+        for _ in 0..50 {
+            tick_door(&mut e);
+        }
+        assert!(
+            e.tile_writes.is_empty(),
+            "it must not rewrite the map every tick"
+        );
+    }
+
+    #[test]
+    fn the_rocket_waits_out_its_fuse_then_climbs_until_it_hits_something() {
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::Rocket);
+        e.x = 1;
+        e.y = 4;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d1 = 60;
+        e.d2 = 10;
+
+        for _ in 0..60 {
+            tick_rocket(&mut e, &level, &data);
+        }
+        assert_eq!(e.y, 4, "it should still be on the pad during the fuse");
+
+        for _ in 0..40 {
+            if e.dead {
+                break;
+            }
+            tick_rocket(&mut e, &level, &data);
+        }
+        assert!(e.dead, "it should destroy itself against the ceiling");
+        assert!(e.y >= 1, "and not fly through it, ending at {}", e.y);
+    }
+
+    #[test]
+    fn the_ivy_plant_climbs_then_returns_after_a_blast() {
+        let mut e = Enemy::default_for_test(EnemyKind::IvyPlant);
+        e.y = 20;
+        e.d1 = 5;
+        e.d4 = 7; // seven rows to climb, as ConstructActor seeds it
+        for _ in 0..40 {
+            tick_ivy_plant(&mut e);
+        }
+        assert_eq!(e.y, 13, "it should have climbed its seven rows");
+
+        e.d2 = 1; // blasted
+        for _ in 0..10 {
+            tick_ivy_plant(&mut e);
+        }
+        assert_eq!(e.y, 20, "and dropped all the way back");
     }
 
     #[test]
