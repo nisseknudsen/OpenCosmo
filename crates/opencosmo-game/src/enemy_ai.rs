@@ -618,6 +618,10 @@ pub struct Enemy {
     /// (SPR_* id, frame count, x, y, DIR8, repeats). Queued for the same
     /// reason as `spawns`: the behaviours stay pure.
     pub decorations: Vec<(u16, usize, i32, i32, usize, u32)>,
+    /// `StartSound` requests raised this tick. Queued like the rest so the
+    /// behaviours stay pure; the priority gate in `sfx.rs` decides which
+    /// of them is actually heard.
+    pub sounds: Vec<u16>,
 }
 
 impl Enemy {
@@ -702,6 +706,7 @@ impl Enemy {
             hold_player: 0,
             won_level: false,
             decorations: Vec::new(),
+            sounds: Vec::new(),
         }
     }
 
@@ -741,6 +746,7 @@ impl Enemy {
             hold_player: 0,
             won_level: false,
             decorations: Vec::new(),
+            sounds: Vec::new(),
         }
     }
 
@@ -995,8 +1001,7 @@ fn tick_small_flame(e: &mut Enemy) {
 /// `ActFlamePulse` (game1.c:5545-5567). Burns through a sixteen-step frame
 /// table, then hides for thirty ticks before firing again.
 ///
-/// NOT PORTED: the smoke decoration emitted as the flame peaks (needs
-/// `NewDecoration`) and `SND_FLAME_PULSE`.
+/// NOT PORTED: the smoke decoration emitted as the flame peaks.
 fn tick_flame_pulse(e: &mut Enemy) {
     const FRAMES: [usize; 16] = [0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 1, 0];
 
@@ -1019,7 +1024,6 @@ fn tick_flame_pulse(e: &mut Enemy) {
 /// The original toggles `Actor.weighted` to switch between falling and
 /// rising; `apply_gravity` reads the same flag here.
 ///
-/// NOT PORTED: `SND_BABY_GHOST_LAND` and `SND_BABY_GHOST_JUMP`.
 fn tick_baby_ghost(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     let (w, h) = (e.width_tiles, e.height_tiles);
 
@@ -1123,7 +1127,6 @@ fn tick_spitting_turret(e: &mut Enemy, player: &Player) {
 /// and whose odd entries are the frame offset, so it advances two at a time.
 /// `d1` is the facing (0 west, 3 east) and doubles as the frame base.
 ///
-/// NOT PORTED: `SND_RED_JUMPER_JUMP` and `SND_RED_JUMPER_LAND`.
 fn tick_red_jumper(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     const JUMP: [i32; 42] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, -2, 2, -2, 2, -2, 2, -2, 2, -1, 2,
@@ -1275,8 +1278,6 @@ fn tick_eye_plant(e: &mut Enemy, player: &Player) {
 /// behavior with different artwork; `data5` picks between throbbing in
 /// place and throbbing then dripping down the screen.
 ///
-/// NOT PORTED: the drip sound (`SND_DRIP`), which needs the sound number
-/// wired through - the motion is complete without it.
 fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
     /// game1.c:2419 - note it holds seven entries but the throb-only path
     /// only ever indexes the first six.
@@ -1300,6 +1301,7 @@ fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
             e.d4 = 1;
             e.d3 = 0;
             e.frame = 4;
+            e.sounds.push(crate::sfx::snd::DRIP);
         }
     } else if e.frame < 6 {
         // Stretching away from the ceiling.
@@ -1321,7 +1323,6 @@ fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
 /// ticks punching out and three pulling back, and the remaining twenty-six
 /// sitting still.
 ///
-/// NOT PORTED: `SND_SPIKES_MOVE` on the two ticks it starts moving.
 fn tick_arrow_piston(e: &mut Enemy) {
     if e.d1 < 31 {
         e.d1 += 1;
@@ -1331,6 +1332,11 @@ fn tick_arrow_piston(e: &mut Enemy) {
 
     // The two windows overlap in the source's `else if` chain: >28 wins
     // over >25, so 29..31 retract and 26..28 extend.
+    // The two ticks it starts moving each way (game1.c:2062).
+    if e.d1 == 29 || e.d1 == 26 {
+        e.sounds.push(crate::sfx::snd::SPIKES_MOVE);
+    }
+
     let out = if e.d5 == DIR2_WEST { -1 } else { 1 };
     if e.d1 > 28 {
         e.x -= out;
@@ -1343,13 +1349,15 @@ fn tick_arrow_piston(e: &mut Enemy) {
 /// it hits something or leaves the screen, and snaps back to its launcher
 /// to start again. `data2`/`data3` hold that launch position.
 ///
-/// NOT PORTED: the launch and impact sounds.
 fn tick_fireball(
     e: &mut Enemy,
     level: &LevelJson,
     data: &GameData,
     scroll: &crate::camera::Scroll,
 ) {
+    if e.d1 == 29 {
+        e.sounds.push(crate::sfx::snd::FIREBALL_LAUNCH);
+    }
     if e.d1 < 30 {
         e.d1 += 1;
     } else {
@@ -1363,6 +1371,7 @@ fn tick_fireball(
             let sx = if e.d5 == DIRP_WEST { e.x + 1 } else { e.x - 2 };
             e.decorations
                 .push((SPR_SMOKE, 6, sx, e.y, crate::effects::DIR8_NORTH, 1));
+            e.sounds.push(crate::sfx::snd::BIG_OBJECT_HIT);
             e.d1 = 0;
             e.x = e.d2;
             e.y = e.d3;
@@ -1439,10 +1448,11 @@ fn tick_spark(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `ActVerticalMover` (game1.c:2258-2280). Rises until the ceiling stops
 /// it, falls until the floor does.
 ///
-/// NOT PORTED: `SND_SAW_BLADE_MOVE`, which the original plays every tick
-/// the blade is on screen.
 fn tick_vertical_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     e.frame = usize::from(e.frame == 0);
+    // The original plays this every tick the blade is on screen; the
+    // priority gate collapses the repeats (game1.c:2264).
+    e.sounds.push(crate::sfx::snd::SAW_BLADE_MOVE);
 
     if e.d1 != DIR2_SOUTH {
         if test_sprite_move(Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data)
@@ -1521,7 +1531,6 @@ fn tick_pipe_end(e: &mut Enemy) {
 /// directly above it, then closes again. The lurch is done by nudging the
 /// plant a column sideways on two of its three frames.
 ///
-/// NOT PORTED: `SND_PLANT_MOUTH_OPEN`.
 fn tick_heart_plant(e: &mut Enemy, player: &Player) {
     if e.d1 == 0 && e.y > player.y && e.x == player.x {
         e.d1 = 1;
@@ -1544,6 +1553,7 @@ fn tick_heart_plant(e: &mut Enemy, player: &Player) {
     }
     if e.frame == 1 {
         e.x -= 1;
+        e.sounds.push(crate::sfx::snd::PLANT_MOUTH_OPEN);
     }
     if e.frame == 2 {
         e.x += 1;
@@ -1599,7 +1609,6 @@ fn tick_two_tons_crusher(e: &mut Enemy) {
 /// underneath, drops two rows a tick until it lands, then climbs back to
 /// where it started at half speed.
 ///
-/// NOT PORTED: the impact sound.
 fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     e.d4 = i32::from(e.d4 == 0);
 
@@ -1635,6 +1644,7 @@ fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, da
             }
         }
         if landed {
+            e.sounds.push(crate::sfx::snd::OBJECT_HIT);
             // Dust kicked out both ways on impact (game1.c:2620-2621).
             e.decorations
                 .push((SPR_SMOKE, 6, e.x + 1, e.y, crate::effects::DIR8_NORTHEAST, 1));
@@ -1712,11 +1722,14 @@ fn tick_flying_wisp(e: &mut Enemy) {
 /// episodes' actors, but the diagonal and downward cases are the same
 /// behavior with a different step.
 ///
-/// NOT PORTED: `SND_PROJECTILE_LAUNCH` on its first tick.
 fn tick_projectile(e: &mut Enemy, scroll: &crate::camera::Scroll) {
     if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
         e.dead = true;
         return;
+    }
+    if e.d1 == 0 {
+        e.d1 = 1;
+        e.sounds.push(crate::sfx::snd::PROJECTILE_LAUNCH);
     }
     e.frame = usize::from(e.frame == 0);
     match e.d5 {
@@ -1821,7 +1834,7 @@ fn tick_sentry_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
 /// level with or below it and within its column range; the `_PROX` variant
 /// never triggers on proximity at all (game1.c:3079).
 ///
-/// NOT PORTED: the shell shards and the crack/hatch sounds.
+/// NOT PORTED: the shell shards.
 fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
     if e.d2 != 0 {
         e.frame = 2;
@@ -1839,6 +1852,7 @@ fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
     if e.d5 == 0 && e.d1 == 0 && e.y <= player.y && e.x - 6 < player.x && e.x + 4 > player.x {
         e.d1 = 1;
         e.d2 = 20;
+        e.sounds.push(crate::sfx::snd::BGHOST_EGG_CRACK);
     }
 
     if e.d2 > 1 {
@@ -1846,6 +1860,7 @@ fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
     } else if e.d2 == 1 {
         e.dead = true;
         e.spawns.push((ACT_BABY_GHOST, e.x, e.y));
+        e.sounds.push(crate::sfx::snd::BGHOST_EGG_HATCH);
     }
 }
 
@@ -1931,6 +1946,7 @@ pub fn burst_worm_crate(e: &mut Enemy) {
         e.tile_writes.push((e.x + i, e.y - 2, TILE_EMPTY));
     }
     e.spawns.push((ACT_PINK_WORM, e.x, e.y));
+    e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
 }
 
 /// `ActSplittingPlatform` (game1.c:3354-3410). Holds a four-tile platform
@@ -2090,6 +2106,7 @@ fn tick_jump_pad_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     if e.d1 > 0 {
         e.frame = 2;
         e.d1 -= 1;
+        e.sounds.push(crate::sfx::snd::JUMP_PAD_ROBOT);
         return;
     }
 
@@ -2113,7 +2130,6 @@ fn tick_jump_pad_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// its seven rows one at a time, animating as it goes. A blast sends it
 /// back down.
 ///
-/// NOT PORTED: `SND_IVY_PLANT_RISE`.
 fn tick_ivy_plant(e: &mut Enemy) {
     if e.d2 != 0 {
         // Falling back down after a blast.
@@ -2139,6 +2155,9 @@ fn tick_ivy_plant(e: &mut Enemy) {
     }
 
     if e.d4 != 0 {
+        if e.d4 == 7 {
+            e.sounds.push(crate::sfx::snd::IVY_PLANT_RISE);
+        }
         e.d4 -= 1;
         e.y -= 1;
     }
@@ -2179,8 +2198,10 @@ fn tick_foot_switch(e: &mut Enemy, switches: &mut SwitchState) {
     e.y += 1;
 
     if e.d1 != 4 {
+        e.sounds.push(crate::sfx::snd::FOOT_SWITCH_MOVE);
         return;
     }
+    e.sounds.push(crate::sfx::snd::FOOT_SWITCH_ON);
     match e.d5 {
         ACT_SWITCH_PLATFORMS => switches.platforms_active = true,
         ACT_SWITCH_MYSTERY_WALL => switches.mystery_wall_time = 4,
@@ -2334,8 +2355,8 @@ fn has_beam(e: &Enemy) -> bool {
 /// them for five ticks at two cells a tick and waits three ticks before it
 /// can shove again.
 ///
-/// NOT PORTED: the "umph" speech bubble on the first shove, the push
-/// sound, and the translucent draw mode it uses between shoves.
+/// NOT PORTED: the "umph" speech bubble on the first shove, and the
+/// translucent draw mode it uses between shoves.
 fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     if e.d2 != 0 {
         // Holding the shove pose.
@@ -2362,6 +2383,7 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
         // Five ticks at two cells each, blockable so a wall stops it, and
         // not abortable - jumping does not get you out of it.
         e.push_player = Some((if west { -1 } else { 1 }, 0, 5, 2));
+        e.sounds.push(crate::sfx::snd::PUSH_PLAYER);
         return;
     }
 
@@ -2401,6 +2423,7 @@ fn tick_monument(e: &mut Enemy) {
         for i in 0..9 {
             e.tile_writes.push((e.x + 1, e.y - i, TILE_EMPTY));
         }
+        e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
         // The dust cloud it collapses into (game1.c:5352-5355).
         for (dx, dy, dir) in [
             (0, 0, crate::effects::DIR8_NORTH),
@@ -2461,6 +2484,7 @@ pub fn blast_satellite(e: &mut Enemy) {
         return;
     }
     e.dead = true;
+    e.sounds.push(crate::sfx::snd::DESTROY_SATELLITE);
     // A ring of smoke in every compass direction (game1.c:4750-4752).
     for dir in 1..9 {
         e.decorations
@@ -2472,7 +2496,7 @@ pub fn blast_satellite(e: &mut Enemy) {
 /// `ActTulipLauncher` (game1.c:5395-5450). Throws a parachute ball, then
 /// sits for a hundred ticks before winding up again.
 ///
-/// NOT PORTED: being destroyed by two blasts, and the launch sound.
+/// NOT PORTED: being destroyed by two blasts.
 fn tick_tulip_launcher(e: &mut Enemy) {
     /// game1.c:5397 - the wind-up, as frame numbers.
     const LAUNCH_FRAMES: [usize; 5] = [0, 2, 1, 0, 1];
@@ -2487,6 +2511,7 @@ fn tick_tulip_launcher(e: &mut Enemy) {
     e.d1 += 1;
     if e.d1 == 2 {
         e.spawns.push((ACT_PARACHUTE_BALL, e.x + 2, e.y - 5));
+        e.sounds.push(crate::sfx::snd::TULIP_LAUNCH);
     }
     if e.d1 == 5 {
         e.d2 = 100;
@@ -2548,7 +2573,7 @@ fn tick_scooter(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `ActBearTrap` (game1.c:4933-4990). Snaps shut on the player standing in
 /// it and holds them for the length of its frame table.
 ///
-/// NOT PORTED: the "umph" bubble and the snap sound.
+/// NOT PORTED: the "umph" bubble.
 fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
     /// game1.c:4937 - open, then twenty-three ticks shut, then easing back
     /// open over the last three.
@@ -2561,6 +2586,7 @@ fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
         // (game1.c:7751).
         if e.x == player.x && e.y == player.y {
             e.d2 = 1;
+            e.sounds.push(crate::sfx::snd::BEAR_TRAP_CLOSE);
             return FRAMES.len() as u32;
         }
         e.frame = 0;
@@ -2630,7 +2656,8 @@ fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// leaves the collision flags meaning what they say.
 ///
 /// NOT PORTED: the boss music, the speech bubble, the smoke, the shards,
-/// and the parachute balls the harder build throws.
+/// and the parachute balls the harder build throws. The damage sound is
+/// raised by `pounce_boss` rather than here.
 fn tick_boss(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) -> bool {
     /// game1.c:5590 - the bob, as per-tick row offsets.
     const Y_JUMP: [i32; 14] = [2, 2, 1, 0, -1, -2, -2, -2, -2, -1, 0, 1, 2, 2];
@@ -2775,6 +2802,7 @@ pub fn pounce_boss(e: &mut Enemy) {
         return;
     }
     e.d5 += 1;
+    e.sounds.push(crate::sfx::snd::BOSS_DAMAGE);
     if e.d1 != 2 {
         e.d1 = 2;
         e.d2 = 31;
@@ -2819,6 +2847,7 @@ pub fn smash_frozen_dn(e: &mut Enemy) {
     if e.d1 == 0 {
         e.d1 = 1;
         e.x += 1;
+        e.sounds.push(crate::sfx::snd::SMASH);
     }
 }
 
@@ -3035,6 +3064,7 @@ pub fn spawn_queued_actors(
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
     effects: Res<crate::effects::EffectAssets>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
@@ -3046,6 +3076,7 @@ pub fn spawn_queued_actors(
     let mut requests = Vec::new();
     let mut writes = Vec::new();
     let mut decorations = Vec::new();
+    let mut sounds: Vec<u16> = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
@@ -3055,6 +3086,9 @@ pub fn spawn_queued_actors(
         }
         if !e.decorations.is_empty() {
             decorations.append(&mut e.decorations);
+        }
+        if !e.sounds.is_empty() {
+            sounds.append(&mut e.sounds);
         }
         if e.hold_player > 0 {
             if let Ok(mut player) = player_q.single_mut() {
@@ -3089,6 +3123,9 @@ pub fn spawn_queued_actors(
     }
     for (spr, frames, x, y, dir, times) in decorations {
         crate::effects::spawn_decoration(&mut commands, &effects, spr, frames, x, y, dir, times);
+    }
+    for number in sounds {
+        sfx.write(crate::sfx::PlaySfx(number));
     }
 }
 
@@ -3229,6 +3266,7 @@ pub fn run_transporters(
             if crate::hints::touching_player(&player, e.x, e.y, e.width_tiles, e.height_tiles) {
                 state.active = e.d5;
                 state.time_left = 15;
+                sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::TRANSPORTER_ON));
                 break;
             }
         }
@@ -3279,8 +3317,12 @@ pub fn run_transporters(
 /// Cross-actor and player-state by nature, so a system rather than a
 /// behaviour tick.
 ///
-/// NOT PORTED: `SND_PIPE_CORNER_HIT` and the "whoa" bubble on first use.
-pub fn run_pipes(mut player_q: Query<&mut Player>, pipes: Query<&Enemy>) {
+/// NOT PORTED: the "whoa" bubble on first use.
+pub fn run_pipes(
+    mut player_q: Query<&mut Player>,
+    pipes: Query<&Enemy>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
     };
@@ -3310,6 +3352,7 @@ pub fn run_pipes(mut player_q: Query<&mut Player>, pipes: Query<&Enemy>) {
                 // Not abortable and not blockable: once you are in the
                 // pipe you go where it goes (game1.c:7620).
                 player.set_push(dx, dy, 100, 2, false, false);
+                sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::PIPE_CORNER_HIT));
             }
             EnemyKind::PipeEnd => {
                 // The end's own row is three below its origin
@@ -3832,9 +3875,9 @@ fn tick_clam_plant(e: &mut Enemy) {
 /// `ActReciprocatingSpikes` (game1.c:2227-2253). Extends and retracts on a
 /// twenty-tick cycle. Frame 2 is fully retracted, drawn hidden.
 ///
-/// NOT PORTED: `SND_SPIKES_MOVE`.
 fn tick_reciprocating_spikes(e: &mut Enemy) {
     e.d2 += 1;
+    e.sounds.push(crate::sfx::snd::SPIKES_MOVE);
     if e.d2 == 20 {
         e.d2 = 0;
     }
@@ -4383,6 +4426,47 @@ mod tests {
         assert_eq!(dir_of(71), (0, 1), "ACT_PIPE_CORNER_S goes south");
         assert_eq!(dir_of(72), (-1, 0), "ACT_PIPE_CORNER_W goes west");
         assert_eq!(dir_of(73), (1, 0), "ACT_PIPE_CORNER_E goes east");
+    }
+
+    #[test]
+    fn behaviours_ask_for_their_sounds() {
+        // A spot check across the queue: each of these was silent before,
+        // with a NOT PORTED note explaining why.
+        let mut piston = Enemy::default_for_test(EnemyKind::ArrowPiston);
+        let mut heard = false;
+        for _ in 0..64 {
+            tick_arrow_piston(&mut piston);
+            heard |= piston.sounds.drain(..).any(|s| s == crate::sfx::snd::SPIKES_MOVE);
+        }
+        assert!(heard, "the piston should be audible when it moves");
+
+        let mut plant = Enemy::default_for_test(EnemyKind::HeartPlant);
+        plant.x = 10;
+        plant.y = 10;
+        let mut above = Player::spawn_at(10, 4);
+        above.x = 10;
+        above.y = 4;
+        let mut opened = false;
+        for _ in 0..20 {
+            tick_heart_plant(&mut plant, &above);
+            opened |= plant
+                .sounds
+                .drain(..)
+                .any(|s| s == crate::sfx::snd::PLANT_MOUTH_OPEN);
+        }
+        assert!(opened, "the plant should be audible when it opens");
+    }
+
+    #[test]
+    fn a_silent_behaviour_stays_silent() {
+        // The eye plant has no sound in the original; the queue must not
+        // become a place where every actor makes noise.
+        let mut e = Enemy::default_for_test(EnemyKind::EyePlant);
+        let p = Player::spawn_at(5, 10);
+        for _ in 0..200 {
+            tick_eye_plant(&mut e, &p);
+        }
+        assert!(e.sounds.is_empty());
     }
 
     #[test]
