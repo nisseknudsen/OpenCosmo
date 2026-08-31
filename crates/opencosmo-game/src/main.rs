@@ -266,6 +266,7 @@ fn main() {
                 // measures them.
                 enemy_ai::draw_force_field_beams,
                 enemy_ai::run_transporters,
+                enemy_ai::finish_on_boss_defeat,
             )
                 .chain()
                 .in_set(Tick::Movement),

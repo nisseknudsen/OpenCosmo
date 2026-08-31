@@ -1,7 +1,7 @@
 //! Converts the owner's original GOG installer into Bevy-ready assets
 //! before compiling, caching the result so repeat builds are instant.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 /// Locates the installer to convert, or `None` if there isn't one.

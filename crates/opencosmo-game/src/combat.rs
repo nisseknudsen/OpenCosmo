@@ -117,6 +117,13 @@ pub fn pounce_enemies(
         // A head switch is thrown by the pounce rather than destroyed:
         // `ActHeadSwitch` keys off frame 1, which the original's pounce
         // switch sets (game1.c:2162).
+        // The boss soaks twelve pounces, each knocking it back into its
+        // bobbing phase (game1.c:7357-7371).
+        if enemy.kind == EnemyKind::Boss {
+            crate::enemy_ai::pounce_boss(&mut enemy);
+            debug!("pounced the boss ({} hits)", enemy.d5);
+            break;
+        }
         if enemy.kind == EnemyKind::HeadSwitch {
             if enemy.frame == 0 {
                 // The knob sinks a row as it is pressed (game1.c:7459).
@@ -344,6 +351,10 @@ pub fn explosion_damage(
                 }
                 // A monument takes two blasts and pays out the largest
                 // single score in the game (game1.c:5361).
+                if enemy.kind == EnemyKind::FrozenDN {
+                    crate::enemy_ai::smash_frozen_dn(&mut enemy);
+                    continue;
+                }
                 if enemy.kind == EnemyKind::Monument {
                     if crate::enemy_ai::blast_monument(&mut enemy) {
                         score.0 += 25600;

@@ -171,7 +171,16 @@ pub enum EnemyKind {
     BeamRobot,
     /// `ActTransporter` (game1.c:4075-4130).
     Transporter,
+    /// `ActBoss` (game1.c:5588-5838) - the five-phase fight that ends the
+    /// episode.
+    Boss,
+    /// `ActFrozenDN` (game1.c:5454-5520).
+    FrozenDN,
 }
+
+/// Pounces needed to finish the boss (game1.c:5595). The harder variant
+/// the source can be built with wants 18; the shipped episodes use 12.
+const BOSS_HITS: i32 = 12;
 
 /// `TILE_SWITCH_BLOCK_1` (graphics.h:124) - the solid a monument stands as.
 const TILE_SWITCH_BLOCK: u16 = 0x3d88;
@@ -264,6 +273,9 @@ impl EnemyKind {
             // it rather than bouncing off, and it is never destroyed
             // (game1.c:7454-7462).
             EnemyKind::HeadSwitch => (0, i32::MAX),
+            // The boss takes twelve pounces, counted in its own data5
+            // rather than here, so the generic path must never kill it.
+            EnemyKind::Boss => (7, i32::MAX),
             _ => return None,
         };
         Some(PounceSpec { recoil, hits })
@@ -432,6 +444,8 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (90, EnemyKind::BeamRobot, [0, 0, 0, 0, 0]),           // ACT_BEAM_ROBOT
     (107, EnemyKind::Transporter, [0, 0, 0, 0, 1]),        // ACT_TRANSPORTER_1
     (108, EnemyKind::Transporter, [0, 0, 0, 0, 2]),        // ACT_TRANSPORTER_2
+    (102, EnemyKind::Boss, [0, 0, 0, 0, 0]),               // ACT_BOSS
+    (221, EnemyKind::FrozenDN, [0, 0, 0, 0, 0]),           // ACT_FROZEN_DN
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -572,6 +586,8 @@ pub struct Enemy {
     pub push_player: Option<(i32, i32, u32, u32)>,
     /// Ticks to hold the player still, raised by the bear trap.
     pub hold_player: u32,
+    /// Set by the boss when its death sequence completes.
+    pub won_level: bool,
 }
 
 impl Enemy {
@@ -654,6 +670,7 @@ impl Enemy {
             tile_writes: Vec::new(),
             push_player: None,
             hold_player: 0,
+            won_level: false,
         }
     }
 
@@ -691,6 +708,7 @@ impl Enemy {
             tile_writes: Vec::new(),
             push_player: None,
             hold_player: 0,
+            won_level: false,
         }
     }
 
@@ -2511,6 +2529,209 @@ fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     e.d2 = len;
 }
 
+/// `ActBoss` (game1.c:5588-5838). Five phases: it rises, pauses, then
+/// bobs across the room for two hundred ticks, slams down chasing the
+/// player, and climbs back to start again. Twelve pounces finish it.
+///
+/// `d1` is the phase, `d5` the hits taken, `d4` the walking direction.
+/// The original borrows `westfree` as a hit-flash timer and `eastfree` as
+/// the death sequence. The flash only picks a white draw mode, which is not
+/// ported, so only the death timer is kept - held in `fall_time`, which
+/// leaves the collision flags meaning what they say.
+///
+/// NOT PORTED: the boss music, the speech bubble, the smoke, the shards,
+/// and the parachute balls the harder build throws.
+fn tick_boss(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) -> bool {
+    /// game1.c:5590 - the bob, as per-tick row offsets.
+    const Y_JUMP: [i32; 14] = [2, 2, 1, 0, -1, -2, -2, -2, -2, -1, 0, 1, 2, 2];
+
+    let free_below = |e: &Enemy, dy: i32| {
+        test_sprite_move(
+            Dir4::South, e.x, e.y + dy, e.width_tiles, e.height_tiles, level, data,
+        ) == MoveResult::Free
+    };
+
+    // --- dying (game1.c:5612-5652) ---
+    if e.fall_time > 0 {
+        e.fall_time -= 1;
+        if e.fall_time < 40 {
+            e.y -= 1;
+        }
+        e.weighted = false;
+        if e.fall_time == 1 || e.y <= 0 {
+            e.dead = true;
+            return true; // won
+        }
+        return false;
+    }
+
+    // --- the fall that starts the death, once it has taken enough ---
+    if e.d5 == BOSS_HITS {
+        if free_below(e, 1) {
+            e.y += 1;
+        } else {
+            e.fall_time = 80;
+        }
+        return false;
+    }
+
+    match e.d1 {
+        // Rising into view.
+        0 => {
+            e.y -= 2;
+            e.d2 += 1;
+            if e.d2 == 6 {
+                e.d1 = 1;
+            }
+        }
+        // Hanging still.
+        1 => {
+            if e.d2 != 0 {
+                e.d2 -= 1;
+            } else {
+                e.d1 = 2;
+            }
+        }
+        // Bobbing across the room.
+        2 => {
+            let step = Y_JUMP[(e.d3.rem_euclid(14)) as usize];
+            if !free_below(e, step) && step == 2 {
+                e.y -= 2;
+            } else if !free_below(e, step) && step == 1 {
+                e.y -= 1;
+            } else {
+                e.y += step;
+            }
+            e.d3 += 1;
+            e.d2 += 1;
+
+            if e.d2 > 30 && e.d2 < 201 {
+                if e.d4 != 0 {
+                    if test_sprite_move(
+                        Dir4::East, e.x + 1, e.y, e.width_tiles, e.height_tiles, level, data,
+                    ) != MoveResult::Free
+                    {
+                        e.d4 = 0;
+                    } else {
+                        e.x += 1;
+                    }
+                } else if test_sprite_move(
+                    Dir4::West, e.x - 1, e.y, e.width_tiles, e.height_tiles, level, data,
+                ) == MoveResult::Free
+                {
+                    e.x -= 1;
+                } else {
+                    e.d4 = 1;
+                }
+            } else if e.d2 > 199 {
+                e.d1 = 3;
+                e.d2 = 0;
+                e.d3 = 8;
+            }
+        }
+        // Rising, then slamming down while chasing the player.
+        3 => {
+            e.d2 += 1;
+            if e.d3 < 6 {
+                e.d3 += 1;
+                e.y -= 2;
+            } else if e.d2 < 102 {
+                e.weighted = true;
+                if !free_below(e, 1) {
+                    e.d3 = 0;
+                    e.weighted = false;
+                } else if e.x + 1 > player.x {
+                    if test_sprite_move(
+                        Dir4::West, e.x - 1, e.y, e.width_tiles, e.height_tiles, level, data,
+                    ) == MoveResult::Free
+                    {
+                        e.x -= 1;
+                    }
+                } else if e.x + 3 < player.x
+                    && test_sprite_move(
+                        Dir4::East, e.x + 1, e.y, e.width_tiles, e.height_tiles, level, data,
+                    ) == MoveResult::Free
+                {
+                    e.x += 1;
+                }
+            } else if !free_below(e, 1) || !free_below(e, 0) {
+                e.d1 = 4;
+                e.d2 = 0;
+                e.d3 = 0;
+                e.weighted = false;
+            } else {
+                e.y += 1;
+            }
+        }
+        // Peeling back off the floor.
+        _ => {
+            e.weighted = false;
+            e.y -= 1;
+            e.d2 += 1;
+            if e.d2 == 6 {
+                e.d1 = 2;
+                e.d3 = 0;
+                e.d2 = 0;
+            }
+        }
+    }
+    false
+}
+
+/// A pounce landing on the boss (game1.c:7346-7375). Each hit knocks it
+/// back into its bobbing phase; the twelfth starts the death sequence.
+pub fn pounce_boss(e: &mut Enemy) {
+    if e.fall_time > 0 || e.d5 >= BOSS_HITS {
+        return;
+    }
+    e.d5 += 1;
+    if e.d1 != 2 {
+        e.d1 = 2;
+        e.d2 = 31;
+        e.d3 = 0;
+        e.d4 = 1;
+        e.weighted = false;
+    }
+}
+
+/// `ActFrozenDN` (game1.c:5454-5520). Smashed out of its ice, then rises
+/// through three timed phases.
+///
+/// NOT PORTED: the shards, the smoke, and the rescue message it ends on -
+/// this is episode 2's closing set piece and the message needs the text
+/// frame wiring.
+fn tick_frozen_dn(e: &mut Enemy) {
+    match e.d1 {
+        0 => {}
+        1 => {
+            e.d2 += 1;
+            if e.d2 % 2 != 0 {
+                e.y -= 1;
+            }
+            if e.d2 == 10 {
+                e.d1 = 2;
+                e.d2 = 0;
+            }
+        }
+        2 => {
+            e.d2 += 1;
+            if e.d2 == 30 {
+                e.d1 = 3;
+                e.d2 = 0;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A blast freeing the frozen figure (game1.c:5459).
+pub fn smash_frozen_dn(e: &mut Enemy) {
+    if e.d1 == 0 {
+        e.d1 = 1;
+        e.x += 1;
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -2650,6 +2871,12 @@ pub fn tick_enemies(
             }
             EnemyKind::BeamRobot => tick_beam_robot(&mut e, &level, &data),
             EnemyKind::Transporter => {}
+            EnemyKind::Boss => {
+                if tick_boss(&mut e, player, &level, &data) {
+                    e.won_level = true;
+                }
+            }
+            EnemyKind::FrozenDN => tick_frozen_dn(&mut e),
             EnemyKind::TriggerLine => {
                 // The episode-end lines only mark the spot; the exit they
                 // stand for is driven by `ExitTrigger` in `actors.rs`.
@@ -2931,6 +3158,31 @@ pub fn run_transporters(
     }
     state.active = 0;
     state.time_left = 0;
+}
+
+/// Ends the level once the boss's death sequence finishes, paying out the
+/// 100000 the original awards (game1.c:5634).
+pub fn finish_on_boss_defeat(
+    mut bosses: Query<&mut Enemy>,
+    mut score: ResMut<crate::flow::Score>,
+    stars: Res<crate::flow::Stars>,
+    mut sequence: ResMut<crate::flow::LevelSequence>,
+    mut finished: EventWriter<crate::flow::LevelFinished>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+) {
+    for mut e in &mut bosses {
+        if !e.won_level {
+            continue;
+        }
+        e.won_level = false;
+        score.0 += 100_000;
+        sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::WIN_LEVEL));
+        let intermission = sequence.advance(stars.0);
+        finished.write(crate::flow::LevelFinished {
+            level: sequence.current().to_string(),
+            intermission,
+        });
+    }
 }
 
 fn draws_hidden(e: &Enemy) -> bool {
@@ -3761,6 +4013,72 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn the_boss_takes_twelve_pounces_and_then_dies() {
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut p = Player::spawn_at(4, 3);
+        p.x = 4;
+        p.y = 3;
+        let mut e = Enemy::default_for_test(EnemyKind::Boss);
+        e.x = 2;
+        e.y = 3;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        // Pounced back to back so it stays on the floor; ticking between
+        // hits would let it float up its bobbing arc, and with no map
+        // below the test world it would then fall out of the bottom.
+        for hit in 1..BOSS_HITS {
+            pounce_boss(&mut e);
+            assert_eq!(e.d5, hit, "hit {hit} should count");
+            assert!(!e.dead, "it must survive hit {hit}");
+        }
+        pounce_boss(&mut e);
+        assert_eq!(e.d5, BOSS_HITS);
+
+        // The last hit starts a fall, then an eighty-tick death sequence.
+        let mut won = false;
+        for _ in 0..200 {
+            won |= tick_boss(&mut e, &p, &level, &data);
+            if e.dead {
+                break;
+            }
+        }
+        assert!(e.dead, "it should die after the final hit");
+        assert!(won, "and report the win");
+    }
+
+    #[test]
+    fn pouncing_a_dying_boss_does_nothing() {
+        let mut e = Enemy::default_for_test(EnemyKind::Boss);
+        e.d5 = BOSS_HITS;
+        pounce_boss(&mut e);
+        assert_eq!(e.d5, BOSS_HITS, "hits must not climb past the limit");
+    }
+
+    #[test]
+    fn the_frozen_figure_rises_only_after_being_smashed() {
+        let mut e = Enemy::default_for_test(EnemyKind::FrozenDN);
+        let start = e.y;
+        for _ in 0..50 {
+            tick_frozen_dn(&mut e);
+        }
+        assert_eq!(e.y, start, "it stays put inside the ice");
+
+        smash_frozen_dn(&mut e);
+        for _ in 0..50 {
+            tick_frozen_dn(&mut e);
+        }
+        assert!(e.y < start, "and rises once freed");
+        assert_eq!(e.d1, 3, "ending in its final phase");
     }
 
     #[test]
