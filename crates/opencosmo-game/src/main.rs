@@ -260,6 +260,10 @@ fn main() {
                 // a thing spawned this tick first moves on the next one,
                 // as it does in the original.
                 enemy_ai::spawn_queued_actors,
+                // Force fields are beams rather than bodies, so their
+                // drawing and their damage live outside the tick that
+                // measures them.
+                enemy_ai::draw_force_field_beams,
             )
                 .chain()
                 .in_set(Tick::Movement),

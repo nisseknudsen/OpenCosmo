@@ -145,6 +145,10 @@ pub enum EnemyKind {
     FootSwitch,
     /// `ActMysteryWall` (game1.c:3820-3854).
     MysteryWall,
+    /// `ActForceField` (game1.c:4346-4392) - a beam rather than a body:
+    /// it draws itself cell by cell until a wall stops it, and hurts the
+    /// player anywhere along that line.
+    ForceField,
 }
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
@@ -381,6 +385,9 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (120, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_LIGHTS]),
     (121, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_FORCE_FIELD]),
     (62, EnemyKind::MysteryWall, [0, 0, 0, 0, 0]),         // ACT_MYSTERY_WALL
+    // --- force fields (game1.c:5930-5933): data5 picks the axis ---
+    (122, EnemyKind::ForceField, [0, 0, 0, 0, 0]),         // ACT_FORCE_FIELD_VERT
+    (123, EnemyKind::ForceField, [0, 0, 0, 0, 1]),         // ACT_FORCE_FIELD_HORIZ
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -2087,6 +2094,72 @@ fn tick_mystery_wall(
     }
 }
 
+/// `ActForceField` (game1.c:4346-4392). The actor itself is never drawn;
+/// each tick it walks out from its own cell until a wall blocks it, and
+/// the beam is that run of cells. `data1` ends the tick holding its length,
+/// which is what the damage and drawing pass reads.
+///
+/// Switching the fields off kills the actor outright (game1.c:4360), so a
+/// thrown switch removes them permanently rather than merely hiding them.
+fn tick_force_field(
+    e: &mut Enemy,
+    switches: &SwitchState,
+    level: &LevelJson,
+    data: &GameData,
+) {
+    e.d4 += 1;
+    if e.d4 == 3 {
+        e.d4 = 0;
+    }
+
+    if !switches.force_fields_active {
+        e.dead = true;
+        e.d1 = 0;
+        return;
+    }
+
+    // Walk until the wall. The original's loop tests the *player* first
+    // and stops there too, but stopping the beam at the player would let
+    // them shield whatever is behind them; the damage pass handles that
+    // separately, so here it only needs the wall.
+    let vertical = e.d5 == 0;
+    let mut len = 0;
+    while len < FORCE_FIELD_MAX {
+        let (x, y) = if vertical {
+            (e.x, e.y - len)
+        } else {
+            (e.x + len, e.y)
+        };
+        let flag = if vertical {
+            TILE_ATTR_BLOCK_NORTH
+        } else {
+            TILE_ATTR_BLOCK_EAST
+        };
+        if attr_at(level, data, x, y) & flag != 0 {
+            break;
+        }
+        len += 1;
+    }
+    e.d1 = len;
+}
+
+/// A beam cannot run further than the map is tall; the cap only stops a
+/// runaway loop if a level ever leaves one unterminated.
+const FORCE_FIELD_MAX: i32 = 64;
+
+/// The cells a force field's beam currently occupies, as a rectangle in
+/// tile space: (x, top row, width, height).
+pub fn force_field_rect(e: &Enemy) -> Option<(i32, i32, i32, i32)> {
+    if e.dead || e.d1 <= 0 {
+        return None;
+    }
+    if e.d5 == 0 {
+        Some((e.x, e.y - e.d1 + 1, e.width_tiles, e.d1))
+    } else {
+        Some((e.x, e.y - e.height_tiles + 1, e.d1, e.height_tiles))
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -2209,6 +2282,9 @@ pub fn tick_enemies(
             EnemyKind::MysteryWall => {
                 tick_mystery_wall(&mut e, &mut switches, &level, &data)
             }
+            EnemyKind::ForceField => {
+                tick_force_field(&mut e, &switches, &level, &data)
+            }
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -2296,10 +2372,112 @@ pub fn spawn_queued_actors(
     }
 }
 
+/// One drawn cell of a force field's beam. Rebuilt whenever the beam's
+/// length changes, which in practice is once - the beam only shortens if
+/// the map changes under it.
+#[derive(Component)]
+pub struct BeamSegment {
+    owner: Entity,
+}
+
+/// Draws each live force field's beam and hurts the player standing in it.
+///
+/// The original redraws the beam cell by cell every tick inside the
+/// behavior (game1.c:4370-4390). Here the behavior only measures it, and
+/// this pass owns the entities, so the beam is rebuilt on change rather
+/// than every tick.
+pub fn draw_force_field_beams(
+    mut commands: Commands,
+    fields: Query<(Entity, &Enemy)>,
+    segments: Query<(Entity, &BeamSegment)>,
+    mut player_q: Query<&mut Player>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+    mut lengths: Local<bevy::platform::collections::HashMap<Entity, i32>>,
+) {
+    for (entity, e) in &fields {
+        if e.kind != EnemyKind::ForceField {
+            continue;
+        }
+        let want = if e.dead { 0 } else { e.d1 };
+        if lengths.get(&entity).copied() == Some(want) {
+            continue;
+        }
+        lengths.insert(entity, want);
+
+        for (seg, owned) in &segments {
+            if owned.owner == entity {
+                commands.entity(seg).despawn();
+            }
+        }
+        let Some(frame) = e.frames.first() else {
+            continue;
+        };
+        for i in 0..want {
+            let (x, y) = if e.d5 == 0 { (e.x, e.y - i) } else { (e.x + i, e.y) };
+            let pos = crate::level::tile_topleft_to_center(
+                x as f32,
+                (y - e.height_tiles + 1) as f32,
+                e.width_tiles as f32 * crate::tileset::TILE_PX,
+                e.height_tiles as f32 * crate::tileset::TILE_PX,
+            );
+            commands.spawn((
+                Sprite {
+                    image: frame.clone(),
+                    ..default()
+                },
+                Transform::from_translation(pos.extend(6.0)),
+                BeamSegment { owner: entity },
+                crate::level::LevelScoped,
+            ));
+        }
+    }
+
+    // Damage: standing anywhere in the beam hurts, exactly as touching the
+    // field itself would (game1.c:4373, 4384).
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.dead_timer != 0 || player.is_invincible() || player.hurt_cooldown > 0 {
+        return;
+    }
+    for (_, e) in &fields {
+        if e.kind != EnemyKind::ForceField {
+            continue;
+        }
+        let Some((bx, by, bw, bh)) = force_field_rect(e) else {
+            continue;
+        };
+        let touching = crate::combat::rects_overlap(
+            bx,
+            by + bh - 1,
+            bw,
+            bh,
+            player.x,
+            player.y,
+            crate::player::PLAYER_WIDTH,
+            crate::player::PLAYER_HEIGHT,
+        );
+        if touching {
+            player.cling_dir = None;
+            player.health -= 1;
+            if player.health <= 0 {
+                player.dead_timer = 1;
+            } else {
+                sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::PLAYER_HURT));
+                player.hurt_cooldown = 44;
+            }
+            return;
+        }
+    }
+}
+
 fn draws_hidden(e: &Enemy) -> bool {
     match e.kind {
         // Never drawn at all - it only spawns smoke (game1.c:5602).
         EnemyKind::SmokeEmitter => true,
+        // The force field's own sprite is never drawn - only its beam is,
+        // by `draw_force_field_beams` (game1.c:4356).
+        EnemyKind::ForceField => true,
         // The pipe corners exist purely to be invisible: the artwork is
         // already in the map tiles, and the actor only marks the corner
         // (game1.c:3052-3057).
@@ -3116,6 +3294,67 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn a_force_field_reaches_from_its_cell_to_the_wall() {
+        // A vertical field in a four-high shaft should span the shaft and
+        // stop at the ceiling, not run off the top of the map.
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let switches = SwitchState::default();
+        let mut e = Enemy::default_for_test(EnemyKind::ForceField);
+        e.x = 1;
+        e.y = 3;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d5 = 0; // vertical
+
+        tick_force_field(&mut e, &switches, &level, &data);
+        assert_eq!(e.d1, 3, "three open rows between floor and ceiling");
+        assert_eq!(force_field_rect(&e), Some((1, 1, 1, 3)));
+    }
+
+    #[test]
+    fn a_horizontal_force_field_runs_along_its_row() {
+        let (level, data) = world(&[
+            "#......#",
+            "########",
+        ]);
+        let switches = SwitchState::default();
+        let mut e = Enemy::default_for_test(EnemyKind::ForceField);
+        e.x = 1;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d5 = 1; // horizontal
+
+        tick_force_field(&mut e, &switches, &level, &data);
+        assert_eq!(e.d1, 6, "six open columns before the far wall");
+    }
+
+    #[test]
+    fn throwing_the_switch_removes_the_force_fields_for_good() {
+        let (level, data) = world(&["....", "####"]);
+        let mut switches = SwitchState::default();
+        let mut e = Enemy::default_for_test(EnemyKind::ForceField);
+        e.x = 1;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        tick_force_field(&mut e, &switches, &level, &data);
+        assert!(force_field_rect(&e).is_some(), "on to begin with");
+
+        switches.force_fields_active = false;
+        tick_force_field(&mut e, &switches, &level, &data);
+        assert!(e.dead, "the switch kills them outright (game1.c:4360)");
+        assert_eq!(force_field_rect(&e), None, "and the beam goes with it");
     }
 
     #[test]
