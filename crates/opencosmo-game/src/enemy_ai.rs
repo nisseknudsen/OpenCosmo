@@ -3791,18 +3791,40 @@ fn tick_suction_walker(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `ActFallingFloor` (game1.c:4977-5014). Waits until the player stands on
 /// it, then drops after a seven-tick delay and shatters on impact.
 ///
-/// NOT PORTED: the map-tile swap that makes it solid while intact (needs
-/// `SetMapTile`), and the shards/sound on impact. Without the tile swap
-/// the player cannot actually stand on one, so the trigger below is the
-/// only thing that starts it falling.
+/// `ActFallingFloor` (game1.c:2900-2940). Lays a two-tile platform across
+/// its own top so the player can stand on it, drops it seven ticks after
+/// they do, and breaks on landing.
+///
+/// The saved tiles go in `d3`/`d4`; the original borrows `westfree` and
+/// `eastfree` for the same purpose, which look like collision flags and
+/// are not.
+///
+/// NOT PORTED: the shards and `SND_DESTROY_SOLID` on impact.
 fn tick_falling_floor(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     let (w, h) = (e.width_tiles, e.height_tiles);
 
     if test_sprite_move(Dir4::South, e.x, e.y + 1, w, h, level, data) != MoveResult::Free {
-        if e.d1 == 2 {
-            e.dead = true; // landed after falling
-        }
+        // Transcribed as-is: the original kills it the moment anything is
+        // below, with no guard for the first tick. No falling floor in any
+        // of the three episodes is placed on solid ground, so this only
+        // ever fires after a fall.
+        e.dead = true;
         return;
+    }
+
+    if e.d1 == 0 {
+        e.d1 = 1;
+        let read = |x: i32| {
+            if x >= 0 && e.y - 1 >= 0 && (x as usize) < level.width {
+                level.tile_at(x as usize, (e.y - 1) as usize) as i32
+            } else {
+                0
+            }
+        };
+        e.d3 = read(e.x);
+        e.d4 = read(e.x + 1);
+        e.tile_writes.push((e.x, e.y - 1, TILE_STRIPED_PLATFORM));
+        e.tile_writes.push((e.x + 1, e.y - 1, TILE_STRIPED_PLATFORM));
     }
 
     if e.y - 2 == player.y && e.x <= player.x + 2 && e.x + 1 >= player.x {
@@ -3812,12 +3834,12 @@ fn tick_falling_floor(e: &mut Enemy, player: &Player, level: &LevelJson, data: &
     if e.d2 != 0 {
         e.d2 -= 1;
         if e.d2 == 0 {
-            e.d1 = 2; // now weighted - falls from here on
+            // Handed to the shared gravity pass rather than moved by hand,
+            // as the original does by setting `weighted`.
+            e.weighted = true;
+            e.tile_writes.push((e.x, e.y - 1, e.d3 as u16));
+            e.tile_writes.push((e.x + 1, e.y - 1, e.d4 as u16));
         }
-    }
-
-    if e.d1 == 2 {
-        e.y += 1;
     }
 }
 
@@ -4288,6 +4310,63 @@ mod tests {
                 abortable: false,
                 blockable: true
             })
+        );
+    }
+
+    #[test]
+    fn a_falling_floor_is_solid_until_someone_stands_on_it() {
+        // Spanning a gap, with air below - which is how every one of the
+        // 63 placements in the shipped episodes is positioned.
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "........",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::FallingFloor);
+        e.x = 2;
+        e.y = 2;
+        e.width_tiles = 2;
+        e.height_tiles = 1;
+
+        let mut away = Player::spawn_at(30, 0);
+        away.x = 30;
+        away.y = 0;
+        tick_falling_floor(&mut e, &away, &level, &data);
+        assert_eq!(
+            e.tile_writes,
+            vec![(2, 1, TILE_STRIPED_PLATFORM), (3, 1, TILE_STRIPED_PLATFORM)],
+            "it lays a platform you can stand on"
+        );
+        e.tile_writes.clear();
+        for _ in 0..30 {
+            tick_falling_floor(&mut e, &away, &level, &data);
+        }
+        assert!(!e.weighted, "it must not fall with nobody on it");
+        assert!(e.tile_writes.is_empty(), "and must not restamp every tick");
+
+        // Standing on it: the player's row is two above the actor's. The
+        // trigger re-arms every tick they stay, so it does not give way
+        // underneath them - it gives way a few ticks after they step off,
+        // which is what makes it collapse just behind you.
+        let mut on = Player::spawn_at(2, 0);
+        on.x = 2;
+        on.y = 0;
+        for _ in 0..20 {
+            tick_falling_floor(&mut e, &on, &level, &data);
+        }
+        assert!(!e.weighted, "it holds while it is being stood on");
+
+        for _ in 0..8 {
+            tick_falling_floor(&mut e, &away, &level, &data);
+        }
+        assert!(e.weighted, "and lets go seven ticks after they leave");
+        assert_eq!(
+            e.tile_writes,
+            vec![(2, 1, 0), (3, 1, 0)],
+            "and put back exactly the tiles it covered, or it would leave \
+             an invisible ledge in mid-air"
         );
     }
 
