@@ -188,6 +188,8 @@ fn main() {
         .init_resource::<hints::SawAutoHintGlobe>()
         .init_resource::<hints::HintLatch>()
         .init_resource::<level::TileIndex>()
+        .init_resource::<enemy_ai::SwitchState>()
+        .init_resource::<enemy_ai::TransporterState>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -259,6 +261,12 @@ fn main() {
                 // a thing spawned this tick first moves on the next one,
                 // as it does in the original.
                 enemy_ai::spawn_queued_actors,
+                // Force fields are beams rather than bodies, so their
+                // drawing and their damage live outside the tick that
+                // measures them.
+                enemy_ai::draw_force_field_beams,
+                enemy_ai::run_transporters,
+                enemy_ai::finish_on_boss_defeat,
             )
                 .chain()
                 .in_set(Tick::Movement),
@@ -430,6 +438,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    mut switches: ResMut<enemy_ai::SwitchState>,
     mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
 ) {
@@ -448,6 +457,7 @@ fn setup_game(
         &data,
         &tileset_assets,
         &mut tile_index,
+        &mut switches,
         &start_level,
     )
     .expect("start level missing from generated assets");

@@ -114,6 +114,25 @@ pub fn pounce_enemies(
             break;
         }
 
+        // A head switch is thrown by the pounce rather than destroyed:
+        // `ActHeadSwitch` keys off frame 1, which the original's pounce
+        // switch sets (game1.c:2162).
+        // The boss soaks twelve pounces, each knocking it back into its
+        // bobbing phase (game1.c:7357-7371).
+        if enemy.kind == EnemyKind::Boss {
+            crate::enemy_ai::pounce_boss(&mut enemy);
+            debug!("pounced the boss ({} hits)", enemy.d5);
+            break;
+        }
+        if enemy.kind == EnemyKind::HeadSwitch {
+            if enemy.frame == 0 {
+                // The knob sinks a row as it is pressed (game1.c:7459).
+                enemy.y -= 1;
+                enemy.frame = 1;
+            }
+            debug!("pounced a head switch at ({}, {})", enemy.x, enemy.y);
+            break;
+        }
         debug!("pounce killed enemy at ({}, {})", enemy.x, enemy.y);
         commands.entity(entity).despawn();
         effects::spawn_pounce_debris(&mut commands, &effects, enemy.x, enemy.y);
@@ -324,6 +343,28 @@ pub fn explosion_damage(
                 // has a map platform to clear and a worm to let out, which
                 // it queues for the spawn pass, so its entity has to live
                 // one more tick (game1.c:4696-4719).
+                // A foot switch is driven down a step by each blast, not
+                // destroyed - four presses throw it (game1.c:1966-1977).
+                if enemy.kind == EnemyKind::FootSwitch {
+                    crate::enemy_ai::press_foot_switch(&mut enemy);
+                    continue;
+                }
+                // A monument takes two blasts and pays out the largest
+                // single score in the game (game1.c:5361).
+                if enemy.kind == EnemyKind::FrozenDN {
+                    crate::enemy_ai::smash_frozen_dn(&mut enemy);
+                    continue;
+                }
+                if enemy.kind == EnemyKind::Monument {
+                    if crate::enemy_ai::blast_monument(&mut enemy) {
+                        score.0 += 25600;
+                    }
+                    continue;
+                }
+                if enemy.kind == EnemyKind::Satellite {
+                    crate::enemy_ai::blast_satellite(&mut enemy);
+                    continue;
+                }
                 if enemy.kind == EnemyKind::WormCrate {
                     debug!("explosion burst a worm crate at ({}, {})", enemy.x, enemy.y);
                     crate::enemy_ai::burst_worm_crate(&mut enemy);

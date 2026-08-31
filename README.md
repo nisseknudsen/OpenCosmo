@@ -100,15 +100,16 @@ original's scroll camera; level progression including the bonus stages gated on
 your star count; pouncing and bombs; scoring and pickups; the status bar, title
 screen, menus and credits; hint globes; death replaying the level from scratch.
 
-Per-actor behaviour is ported for 48 of the original's `ActXxx()` functions,
-covering about 96% of the actors placed across the three episodes. The rest
-fall back to a generic hazard/walker pass.
+Per-actor behaviour is ported for 63 of the original's `ActXxx()` functions —
+**every actor type placed in any of the three episodes**, including the
+switches and doors, the force fields, the transporters and the boss fight.
 
-**Missing:** force fields, the pusher robot, the head switches that unlock
-doors (doors themselves work, but stay locked), the scooter and transporter,
-the boss, and the dizzy/ice-slide player states. A few ported behaviours are
-missing a piece that needs player state the port does not have yet - the
-rocket flies but cannot carry you, and the bear trap does not hold you.
+**Missing:** the dizzy and ice-slide player states, and a few pieces of ported
+behaviours that need player state the port does not have yet — the rocket flies
+but cannot carry you, and the scooter cannot be ridden. Decorative touches are
+also left out throughout: smoke puffs, shards, sparkles and several sounds.
+Each omission is marked with a `NOT PORTED:` line in the behaviour's doc
+comment.
 
 There's no lives or game-over system because the original has none — dying
 costs you the level's progress, not a life.

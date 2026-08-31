@@ -77,11 +77,49 @@ pub struct Player {
     /// at 240 (game1.c:5311-5333); a counter here is the same thing without
     /// needing the actor to own player state.
     pub invincible_ticks: u32,
+    /// Being shoved by something else - the pusher robot, and in the
+    /// original the scooter and rocket too (`SetPlayerPush`,
+    /// game1.c:8341-8360). While this is running the player's own
+    /// movement commands are ignored, which is what `blockMovementCmds`
+    /// does there.
+    pub push: Option<Push>,
+    /// Held in place by something - the bear trap. `blockMovementCmds` in
+    /// the original (game1.c:7753); the player can still be hurt and can
+    /// still die, they just cannot walk out.
+    pub held_ticks: u32,
     /// Stand-in for `random()`, used only for idle animation jitter.
     rng: u32,
 }
 
+/// One shove in progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Push {
+    pub dx: i32,
+    pub dy: i32,
+    /// Cells moved per tick.
+    pub speed: u32,
+    pub time: u32,
+    pub max_time: u32,
+    /// Whether jumping cancels it.
+    pub abortable: bool,
+    /// Whether hitting something stops it.
+    pub blockable: bool,
+}
+
 impl Player {
+    /// `SetPlayerPush` (game1.c:8341-8360).
+    pub fn set_push(&mut self, dx: i32, dy: i32, max_time: u32, speed: u32, abortable: bool, blockable: bool) {
+        self.push = Some(Push {
+            dx,
+            dy,
+            speed,
+            time: 0,
+            max_time,
+            abortable,
+            blockable,
+        });
+    }
+
     pub fn spawn_at(x: i32, y: i32) -> Self {
         Player {
             x,
@@ -105,6 +143,8 @@ impl Player {
             move_count: 0,
             idle_count: 0,
             invincible_ticks: 0,
+            push: None,
+            held_ticks: 0,
             rng: 0x1337_beef,
         }
     }
@@ -358,6 +398,72 @@ enum Direction {
     East,
 }
 
+/// `MovePlayerPush` (game1.c:8375-8437). Carries the player along while a
+/// shove is active, one cell at a time up to `speed` cells a tick, and
+/// stops early on hitting anything if the shove is blockable.
+///
+/// The scroll is carried with the player, which is what keeps a shove from
+/// throwing them out of the view.
+fn move_player_push(
+    p: &mut Player,
+    scroll: &mut crate::camera::Scroll,
+    level: &crate::data::LevelJson,
+    data: &GameData,
+    jump_pressed: bool,
+    map_width: i32,
+) -> bool {
+    let Some(mut push) = p.push else {
+        return false;
+    };
+    if jump_pressed && push.abortable {
+        p.push = None;
+        return false;
+    }
+
+    let mut dummy = false;
+    let mut blocked = false;
+    for _ in 0..push.speed {
+        if p.x + push.dx > 0 && p.x + push.dx + 2 < map_width {
+            p.x += push.dx;
+        }
+        p.y += push.dy;
+        scroll.x += push.dx;
+        scroll.y += push.dy;
+
+        if push.blockable
+            && [
+                Direction::West,
+                Direction::East,
+                Direction::North,
+                Direction::South,
+            ]
+            .into_iter()
+            .any(|d| test_move(d, p.x, p.y, level, data, &mut dummy) != MoveResult::Free)
+        {
+            blocked = true;
+            break;
+        }
+    }
+
+    if blocked {
+        // The original moves into the wall and then backs off a step
+        // rather than testing ahead (game1.c:8425-8432).
+        p.x -= push.dx;
+        p.y -= push.dy;
+        scroll.x -= push.dx;
+        scroll.y -= push.dy;
+        p.push = None;
+    } else {
+        push.time += 1;
+        if push.time >= push.max_time {
+            p.push = None;
+        } else {
+            p.push = Some(push);
+        }
+    }
+    true
+}
+
 pub fn move_player_tick(
     mut query: Query<&mut Player>,
     input: Res<PlayerInput>,
@@ -373,6 +479,24 @@ pub fn move_player_tick(
         return; // frozen during the death animation, game1.c:8452
     }
     let level = &level_data.level;
+    // Held fast by a trap: the tick still runs (gravity, damage, death)
+    // but the movement commands are ignored (game1.c:7753).
+    if p.held_ticks > 0 {
+        p.held_ticks -= 1;
+        return;
+    }
+    // A shove overrides the player's own commands for as long as it runs,
+    // which is what `blockMovementCmds` does in the original.
+    if move_player_push(
+        &mut p,
+        &mut scroll,
+        level,
+        &data,
+        input.jump,
+        level.width as i32,
+    ) {
+        return;
+    }
     let mut dummy_cling = false;
     p.move_count = p.move_count.wrapping_add(1);
     p.cling_slip = false;
