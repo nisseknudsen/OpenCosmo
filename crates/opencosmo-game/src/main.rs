@@ -267,6 +267,7 @@ fn main() {
                 enemy_ai::draw_force_field_beams,
                 enemy_ai::run_transporters,
                 enemy_ai::run_pipes,
+                level::move_platforms,
                 level::apply_light_switch,
                 enemy_ai::finish_on_boss_defeat,
             )
