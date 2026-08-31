@@ -524,98 +524,119 @@ pub fn spawn_level_actors(
             continue;
         }
 
-        let rel_dir = format!("sprites/actors/{sprite_type}");
-        let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
-            continue;
-        };
-        let Some(frame0) = manifest.frames.first() else {
-            continue;
-        };
-        let FrameMetaJson {
-            file,
-            width_px,
-            height_px,
-        } = frame0;
-        let height_tiles = (*height_px as f32 / 8.0).ceil();
-        let top_row = ay as f32 - height_tiles + 1.0;
-        let pos = tile_topleft_to_center(ax as f32, top_row, *width_px as f32, *height_px as f32);
-        let mut entity = commands.spawn((
-            Sprite {
-                image: asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{file}"))),
-                ..default()
-            },
-            Transform::from_translation(pos.extend(5.0)),
-            StaticActor,
-            LevelScoped,
-        ));
+        spawn_one_actor(commands, asset_server, data, act_type, ax, ay);
+    }
+}
 
-        // Actors with a ported ActXxx() behavior drive their own position
-        // and frame from here on (crate::enemy_ai). They keep whatever
-        // Hazard/Collectible markers apply, but must not also be given the
-        // generic `Walker`, or two systems would fight over their position.
-        let behavior = crate::enemy_ai::behavior_for(act_type);
-        if let Some((kind, init)) = behavior {
-            let frames: Vec<Handle<Image>> = manifest
-                .frames
-                .iter()
-                .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
-                .collect();
-            entity.insert((
-                crate::enemy_ai::Enemy::new(
-                    kind,
-                    init,
-                    ax,
-                    ay,
-                    (*width_px as f32 / 8.0).ceil() as i32,
-                    height_tiles as i32,
-                    frames,
-                    opencosmo_assets::actor_flags::flags_for(act_type),
-                ),
-                crate::motion::PrevPos { x: ax, y: ay },
-            ));
-        }
-        if act_type == ACT_EXIT_SIGN {
-            entity.insert(ExitSign {
+/// Spawns one actor entity: artwork, behavior, and whatever gameplay
+/// markers its id earns. Shared by the level loader and by actors that
+/// spawn other actors at runtime (`NewActor` in the original), so a
+/// projectile fired mid-level is put together exactly like one placed by
+/// the map.
+pub fn spawn_one_actor(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    data: &GameData,
+    act_type: u16,
+    ax: i32,
+    ay: i32,
+) {
+    let sprite_type = opencosmo_assets::actor_sprite_map::ACT_TO_SPRITE
+        .iter()
+        .find(|(id, ..)| *id == act_type)
+        .map(|(_, spr, ..)| *spr)
+        .unwrap_or(act_type);
+    let rel_dir = format!("sprites/actors/{sprite_type}");
+    let Some(manifest) = data.load_sprite_manifest(&rel_dir) else {
+        return;
+    };
+    let Some(frame0) = manifest.frames.first() else {
+        return;
+    };
+    let FrameMetaJson {
+        file,
+        width_px,
+        height_px,
+    } = frame0;
+    let height_tiles = (*height_px as f32 / 8.0).ceil();
+    let top_row = ay as f32 - height_tiles + 1.0;
+    let pos = tile_topleft_to_center(ax as f32, top_row, *width_px as f32, *height_px as f32);
+    let mut entity = commands.spawn((
+        Sprite {
+            image: asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{file}"))),
+            ..default()
+        },
+        Transform::from_translation(pos.extend(5.0)),
+        StaticActor,
+        LevelScoped,
+    ));
+
+    // Actors with a ported ActXxx() behavior drive their own position
+    // and frame from here on (crate::enemy_ai). They keep whatever
+    // Hazard/Collectible markers apply, but must not also be given the
+    // generic `Walker`, or two systems would fight over their position.
+    let behavior = crate::enemy_ai::behavior_for(act_type);
+    if let Some((kind, init)) = behavior {
+        let frames: Vec<Handle<Image>> = manifest
+            .frames
+            .iter()
+            .map(|f| asset_server.load(crate::data::asset_path(&format!("{rel_dir}/{}", f.file))))
+            .collect();
+        entity.insert((
+            crate::enemy_ai::Enemy::new(
+                kind,
+                init,
+                ax,
+                ay,
+                (*width_px as f32 / 8.0).ceil() as i32,
+                height_tiles as i32,
+                frames,
+                opencosmo_assets::actor_flags::flags_for(act_type),
+            ),
+            crate::motion::PrevPos { x: ax, y: ay },
+        ));
+    }
+    if act_type == ACT_EXIT_SIGN {
+        entity.insert(ExitSign {
+            x: ax,
+            y: ay,
+        });
+    }
+    if EXIT_ACT_IDS.contains(&act_type) {
+        entity.insert(ExitTrigger {
+            x: ax,
+            y: ay,
+        });
+    }
+    if crate::pickups::pickup_for_sprite(sprite_type).is_some() {
+        entity.insert(Collectible {
+            x: ax,
+            y: ay,
+            spr: sprite_type,
+        });
+    }
+    if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {
+        entity.insert(crate::enemy::Hazard);
+    }
+    if let Some(contents) = opencosmo_assets::actor_sprite_map::container_contents(act_type) {
+        if contents != act_type {
+            // ACT_BASKET_NULL "contains itself" - the game's encoding
+            // for an empty basket; nothing to break out of it.
+            entity.insert(Container {
                 x: ax,
                 y: ay,
+                contents,
             });
         }
-        if EXIT_ACT_IDS.contains(&act_type) {
-            entity.insert(ExitTrigger {
-                x: ax,
-                y: ay,
-            });
-        }
-        if crate::pickups::pickup_for_sprite(sprite_type).is_some() {
-            entity.insert(Collectible {
-                x: ax,
-                y: ay,
-                spr: sprite_type,
-            });
-        }
-        if crate::enemy::HAZARD_ACT_IDS.contains(&act_type) {
-            entity.insert(crate::enemy::Hazard);
-        }
-        if let Some(contents) = opencosmo_assets::actor_sprite_map::container_contents(act_type) {
-            if contents != act_type {
-                // ACT_BASKET_NULL "contains itself" - the game's encoding
-                // for an empty basket; nothing to break out of it.
-                entity.insert(Container {
-                    x: ax,
-                    y: ay,
-                    contents,
-                });
-            }
-        }
-        if behavior.is_none() && crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
-            let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;
-            entity.insert(crate::enemy::Walker {
-                x: ax,
-                y: ay,
-                dir: 1,
-                width_tiles,
-                height_tiles: height_tiles as i32,
-            });
-        }
+    }
+    if behavior.is_none() && crate::enemy::WALKER_ACT_IDS.contains(&act_type) {
+        let width_tiles = (*width_px as f32 / 8.0).ceil() as i32;
+        entity.insert(crate::enemy::Walker {
+            x: ax,
+            y: ay,
+            dir: 1,
+            width_tiles,
+            height_tiles: height_tiles as i32,
+        });
     }
 }

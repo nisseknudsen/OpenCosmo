@@ -253,6 +253,11 @@ fn main() {
                 // Runs before hazard_damage so contact tests see this
                 // tick's positions rather than the previous one's.
                 enemy_ai::tick_enemies,
+                // Builds whatever the behaviors asked for - a turret's
+                // projectile, a hatching egg's ghost. After the ticks, so
+                // a thing spawned this tick first moves on the next one,
+                // as it does in the original.
+                enemy_ai::spawn_queued_actors,
             )
                 .chain()
                 .in_set(Tick::Movement),
