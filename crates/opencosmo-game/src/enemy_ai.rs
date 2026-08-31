@@ -152,7 +152,24 @@ pub enum EnemyKind {
     /// `ActPusherRobot` (game1.c:4488-4560) - shoves the player rather
     /// than hurting them.
     PusherRobot,
+    /// `ActMonument` (game1.c:5338-5390) - a nine-tile pillar that two
+    /// blasts bring down for a large score.
+    Monument,
+    /// `ActSatellite` (game1.c:4728-4770).
+    Satellite,
+    /// `ActTulipLauncher` (game1.c:5395-5450).
+    TulipLauncher,
+    /// `ActEpisode1End` (game1.c:5470-5482) and `ActExitLineHorizontal`
+    /// (game1.c:5487-5498) - invisible trigger lines.
+    TriggerLine,
 }
+
+/// `TILE_SWITCH_BLOCK_1` (graphics.h:124) - the solid a monument stands as.
+const TILE_SWITCH_BLOCK: u16 = 0x3d88;
+/// `ACT_PARACHUTE_BALL` (actor.h) - what a tulip launcher throws.
+const ACT_PARACHUTE_BALL: u16 = 22;
+/// `ACT_HAMBURGER` (actor.h) - what a destroyed satellite drops.
+const ACT_HAMBURGER: u16 = 82;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
 const ACT_DOOR_BLUE: u16 = 11;
@@ -392,6 +409,15 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (122, EnemyKind::ForceField, [0, 0, 0, 0, 0]),         // ACT_FORCE_FIELD_VERT
     (123, EnemyKind::ForceField, [0, 0, 0, 0, 1]),         // ACT_FORCE_FIELD_HORIZ
     (126, EnemyKind::PusherRobot, [DIR2_WEST, 0, 0, 0, 4]), // ACT_PUSHER_ROBOT
+    (64, EnemyKind::Monument, [0, 0, 0, 0, 0]),            // ACT_MONUMENT
+    (143, EnemyKind::Satellite, [0, 0, 0, 0, 0]),          // ACT_SATELLITE
+    (152, EnemyKind::TulipLauncher, [0, 30, 0, 0, 0]),     // ACT_TULIP_LAUNCHER
+    // Invisible trigger lines: the episode-end cliffhangers and the
+    // horizontal exit line (game1.c:6061, 6361).
+    (164, EnemyKind::TriggerLine, [0, 0, 0, 0, 0]),        // ACT_EP1_END_1
+    (165, EnemyKind::TriggerLine, [0, 0, 0, 0, 0]),        // ACT_EP1_END_2
+    (166, EnemyKind::TriggerLine, [0, 0, 0, 0, 0]),        // ACT_EP1_END_3
+    (265, EnemyKind::TriggerLine, [1, 0, 0, 0, 0]),        // ACT_EP2_END_LINE
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -2229,6 +2255,118 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
     }
 }
 
+/// `ActMonument` (game1.c:5338-5390). Stands as nine tiles of solid until
+/// *three* blasts bring it down, paying out 25600 - the largest single
+/// score in the game. Three, not two: the frame climbs 0 -> 1 -> 2 -> 3
+/// and only the step onto 3 topples it (game1.c:5381-5387).
+///
+/// NOT PORTED: the shards, the smoke, and the two score effects it throws.
+fn tick_monument(e: &mut Enemy) {
+    if e.d2 != 0 {
+        e.dead = true;
+        for i in 0..9 {
+            e.tile_writes.push((e.x + 1, e.y - i, TILE_EMPTY));
+        }
+        return;
+    }
+    if !e.west_free {
+        e.west_free = true;
+        for i in 0..9 {
+            e.tile_writes.push((e.x + 1, e.y - i, TILE_SWITCH_BLOCK));
+        }
+    }
+    if e.d1 != 0 {
+        e.d1 -= 1;
+    }
+}
+
+/// A blast landing on a monument. Returns whether this one toppled it; the
+/// earlier ones only make it flash (game1.c:5378-5389).
+pub fn blast_monument(e: &mut Enemy) -> bool {
+    if e.d1 != 0 || e.d2 != 0 {
+        return false;
+    }
+    e.d1 = 10;
+    e.frame += 1;
+    if e.frame == 3 {
+        e.frame = 2;
+        e.d2 = 1;
+        return true; // this one brings it down
+    }
+    false
+}
+
+/// `ActSatellite` (game1.c:4728-4770). Two blasts destroy it and it drops
+/// a hamburger.
+///
+/// NOT PORTED: the smoke ring, the shards and the destruction sound.
+fn tick_satellite(e: &mut Enemy) {
+    if e.d2 != 0 {
+        e.d2 -= 1;
+    }
+}
+
+/// A blast landing on a satellite.
+pub fn blast_satellite(e: &mut Enemy) {
+    if e.d2 != 0 {
+        return;
+    }
+    if e.d1 == 0 {
+        e.d1 = 1;
+        e.d2 = 15;
+        return;
+    }
+    e.dead = true;
+    e.spawns.push((ACT_HAMBURGER, e.x + 4, e.y));
+}
+
+/// `ActTulipLauncher` (game1.c:5395-5450). Throws a parachute ball, then
+/// sits for a hundred ticks before winding up again.
+///
+/// NOT PORTED: being destroyed by two blasts, and the launch sound.
+fn tick_tulip_launcher(e: &mut Enemy) {
+    /// game1.c:5397 - the wind-up, as frame numbers.
+    const LAUNCH_FRAMES: [usize; 5] = [0, 2, 1, 0, 1];
+
+    if e.d2 != 0 {
+        e.frame = 1;
+        e.d2 -= 1;
+        return;
+    }
+
+    e.frame = LAUNCH_FRAMES[e.d1 as usize % LAUNCH_FRAMES.len()];
+    e.d1 += 1;
+    if e.d1 == 2 {
+        e.spawns.push((ACT_PARACHUTE_BALL, e.x + 2, e.y - 5));
+    }
+    if e.d1 == 5 {
+        e.d2 = 100;
+        e.d1 = 0;
+    }
+}
+
+/// `ActEpisode1End` (game1.c:5470-5482) and `ActExitLineHorizontal`
+/// (game1.c:5487-5498). Both are invisible lines that fire once when the
+/// player crosses them; `data1` distinguishes the episode-2 exit line,
+/// which is crossed from the other side.
+///
+/// NOT PORTED: the episode-1 cliffhanger text the first kind shows. The
+/// line itself is ported so the trigger exists and can be hooked up.
+fn tick_trigger_line(e: &mut Enemy, player: &Player) -> bool {
+    if e.d2 != 0 {
+        return false;
+    }
+    let crossed = if e.d1 == 0 {
+        e.y <= player.y && e.y >= player.y - 4
+    } else {
+        e.y >= player.y
+    };
+    if crossed {
+        e.d2 = 1;
+    }
+    crossed
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -2355,6 +2493,14 @@ pub fn tick_enemies(
                 tick_force_field(&mut e, &switches, &level, &data)
             }
             EnemyKind::PusherRobot => tick_pusher_robot(&mut e, player, &level, &data),
+            EnemyKind::Monument => tick_monument(&mut e),
+            EnemyKind::Satellite => tick_satellite(&mut e),
+            EnemyKind::TulipLauncher => tick_tulip_launcher(&mut e),
+            EnemyKind::TriggerLine => {
+                // The episode-end lines only mark the spot; the exit they
+                // stand for is driven by `ExitTrigger` in `actors.rs`.
+                tick_trigger_line(&mut e, player);
+            }
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -2553,6 +2699,8 @@ fn draws_hidden(e: &Enemy) -> bool {
     match e.kind {
         // Never drawn at all - it only spawns smoke (game1.c:5602).
         EnemyKind::SmokeEmitter => true,
+        // Trigger lines are invisible markers (game1.c:5473, 5497).
+        EnemyKind::TriggerLine => true,
         // The force field's own sprite is never drawn - only its beam is,
         // by `draw_force_field_beams` (game1.c:4356).
         EnemyKind::ForceField => true,
@@ -3372,6 +3520,90 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn a_monument_needs_three_blasts_and_leaves_no_wall_behind() {
+        let mut e = Enemy::default_for_test(EnemyKind::Monument);
+        e.x = 5;
+        e.y = 20;
+
+        tick_monument(&mut e);
+        assert_eq!(e.tile_writes.len(), 9, "it stands as nine tiles of solid");
+        assert!(e.tile_writes.iter().all(|(_, _, r)| *r == TILE_SWITCH_BLOCK));
+        e.tile_writes.clear();
+
+        // Three blasts, and the flash has to run out before another counts.
+        assert!(!blast_monument(&mut e), "one blast is not enough");
+        assert!(!e.dead);
+        for _ in 0..12 {
+            tick_monument(&mut e);
+        }
+        assert!(!blast_monument(&mut e), "nor two");
+        for _ in 0..12 {
+            tick_monument(&mut e);
+        }
+        assert!(blast_monument(&mut e), "the third brings it down");
+        tick_monument(&mut e);
+        assert!(e.dead);
+        assert_eq!(e.tile_writes.len(), 9, "and clears every tile it stood as");
+        assert!(
+            e.tile_writes.iter().all(|(_, _, r)| *r == TILE_EMPTY),
+            "a monument that left its tiles behind would be an invisible wall"
+        );
+    }
+
+    #[test]
+    fn a_satellite_drops_a_hamburger_when_destroyed() {
+        let mut e = Enemy::default_for_test(EnemyKind::Satellite);
+        blast_satellite(&mut e);
+        assert!(!e.dead, "the first blast only stuns it");
+        for _ in 0..16 {
+            tick_satellite(&mut e);
+        }
+        blast_satellite(&mut e);
+        assert!(e.dead);
+        assert_eq!(e.spawns.len(), 1);
+        assert_eq!(e.spawns[0].0, ACT_HAMBURGER);
+    }
+
+    #[test]
+    fn the_tulip_launcher_throws_one_ball_per_cycle() {
+        let mut e = Enemy::default_for_test(EnemyKind::TulipLauncher);
+        let mut at = Vec::new();
+        for tick in 0..400 {
+            tick_tulip_launcher(&mut e);
+            if !e.spawns.is_empty() {
+                assert_eq!(e.spawns.len(), 1, "one ball at a time");
+                assert_eq!(e.spawns[0].0, ACT_PARACHUTE_BALL);
+                at.push(tick);
+                e.spawns.clear();
+            }
+        }
+        // Five wind-up ticks then a hundred idle.
+        let gaps: Vec<_> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            gaps.iter().all(|g| *g == 105),
+            "throws should be 105 ticks apart, got {gaps:?}"
+        );
+        assert!(at.len() >= 3, "and it should keep launching");
+    }
+
+    #[test]
+    fn a_trigger_line_fires_once_and_only_once() {
+        let mut e = Enemy::default_for_test(EnemyKind::TriggerLine);
+        e.y = 10;
+        let mut away = Player::spawn_at(0, 30);
+        away.y = 30;
+        assert!(!tick_trigger_line(&mut e, &away), "not crossed yet");
+
+        let mut on_it = Player::spawn_at(0, 12);
+        on_it.y = 12;
+        assert!(tick_trigger_line(&mut e, &on_it), "crossing fires it");
+        assert!(
+            !tick_trigger_line(&mut e, &on_it),
+            "but standing there must not fire it again"
+        );
     }
 
     #[test]

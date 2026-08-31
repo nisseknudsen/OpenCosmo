@@ -342,6 +342,18 @@ pub fn explosion_damage(
                     crate::enemy_ai::press_foot_switch(&mut enemy);
                     continue;
                 }
+                // A monument takes two blasts and pays out the largest
+                // single score in the game (game1.c:5361).
+                if enemy.kind == EnemyKind::Monument {
+                    if crate::enemy_ai::blast_monument(&mut enemy) {
+                        score.0 += 25600;
+                    }
+                    continue;
+                }
+                if enemy.kind == EnemyKind::Satellite {
+                    crate::enemy_ai::blast_satellite(&mut enemy);
+                    continue;
+                }
                 if enemy.kind == EnemyKind::WormCrate {
                     debug!("explosion burst a worm crate at ({}, {})", enemy.x, enemy.y);
                     crate::enemy_ai::burst_worm_crate(&mut enemy);
