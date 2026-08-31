@@ -149,6 +149,9 @@ pub enum EnemyKind {
     /// it draws itself cell by cell until a wall stops it, and hurts the
     /// player anywhere along that line.
     ForceField,
+    /// `ActPusherRobot` (game1.c:4488-4560) - shoves the player rather
+    /// than hurting them.
+    PusherRobot,
 }
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
@@ -388,6 +391,7 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // --- force fields (game1.c:5930-5933): data5 picks the axis ---
     (122, EnemyKind::ForceField, [0, 0, 0, 0, 0]),         // ACT_FORCE_FIELD_VERT
     (123, EnemyKind::ForceField, [0, 0, 0, 0, 1]),         // ACT_FORCE_FIELD_HORIZ
+    (126, EnemyKind::PusherRobot, [DIR2_WEST, 0, 0, 0, 4]), // ACT_PUSHER_ROBOT
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -513,6 +517,9 @@ pub struct Enemy {
     /// `SetMapTile` writes raised this tick, as (x, y, raw tile). Queued
     /// for the same reason as `spawns`: the behaviors stay pure.
     pub tile_writes: Vec<(i32, i32, u16)>,
+    /// A shove to apply to the player this tick, as
+    /// (dx, dy, max_time, speed) - see `Player::set_push`.
+    pub push_player: Option<(i32, i32, u32, u32)>,
 }
 
 impl Enemy {
@@ -593,6 +600,7 @@ impl Enemy {
             rng: (x as u32).wrapping_mul(1973).wrapping_add((y as u32).wrapping_mul(9277)) | 1,
             spawns: Vec::new(),
             tile_writes: Vec::new(),
+            push_player: None,
         }
     }
 
@@ -628,6 +636,7 @@ impl Enemy {
             rng: 0x1234_5678,
             spawns: Vec::new(),
             tile_writes: Vec::new(),
+            push_player: None,
         }
     }
 
@@ -2160,6 +2169,66 @@ pub fn force_field_rect(e: &Enemy) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
+/// `ActPusherRobot` (game1.c:4488-4560). Paces at half speed until the
+/// player is level with it and exactly three columns ahead, then shoves
+/// them for five ticks at two cells a tick and waits three ticks before it
+/// can shove again.
+///
+/// NOT PORTED: the "umph" speech bubble on the first shove, the push
+/// sound, and the translucent draw mode it uses between shoves.
+fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    if e.d2 != 0 {
+        // Holding the shove pose.
+        e.d2 -= 1;
+        return;
+    }
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    }
+
+    e.d3 = i32::from(e.d3 == 0);
+
+    let west = e.d1 == DIR2_WEST;
+    // The reach is asymmetric because the robot's origin is its left edge:
+    // three columns west of it, four east (game1.c:4505, 4530).
+    let in_reach = e.y == player.y
+        && e.d4 == 0
+        && if west { e.x - 3 == player.x } else { e.x + 4 == player.x };
+
+    if in_reach {
+        e.frame = if west { 2 } else { 5 };
+        e.d2 = 8;
+        e.d4 = 3;
+        // Five ticks at two cells each, blockable so a wall stops it, and
+        // not abortable - jumping does not get you out of it.
+        e.push_player = Some((if west { -1 } else { 1 }, 0, 5, 2));
+        return;
+    }
+
+    if e.d3 == 0 {
+        return;
+    }
+    if west {
+        e.x -= 1;
+        adjust_actor_move(e, Dir4::West, level, data);
+        if !e.west_free {
+            e.d1 = DIR2_EAST;
+            e.frame = (e.x % 2) as usize + 3;
+        } else {
+            e.frame = usize::from(e.frame == 0);
+        }
+    } else {
+        e.x += 1;
+        adjust_actor_move(e, Dir4::East, level, data);
+        if !e.east_free {
+            e.d1 = DIR2_WEST;
+            e.frame = usize::from(e.frame == 0);
+        } else {
+            e.frame = (e.x % 2) as usize + 3;
+        }
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -2285,6 +2354,7 @@ pub fn tick_enemies(
             EnemyKind::ForceField => {
                 tick_force_field(&mut e, &switches, &level, &data)
             }
+            EnemyKind::PusherRobot => tick_pusher_robot(&mut e, player, &level, &data),
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -2339,6 +2409,7 @@ pub fn spawn_queued_actors(
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
+    mut player_q: Query<&mut Player>,
     mut query: Query<&mut Enemy>,
 ) {
     // Collected first so the borrow on the query ends before spawning,
@@ -2351,6 +2422,13 @@ pub fn spawn_queued_actors(
         }
         if !e.tile_writes.is_empty() {
             writes.append(&mut e.tile_writes);
+        }
+        if let Some((dx, dy, max_time, speed)) = e.push_player.take() {
+            if let Ok(mut player) = player_q.single_mut() {
+                // Not abortable and blockable, as the pusher robot sets it
+                // (game1.c:4510).
+                player.set_push(dx, dy, max_time, speed, false, true);
+            }
         }
     }
     if let Some(tileset) = tileset {
@@ -3294,6 +3372,66 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn the_pusher_robot_shoves_only_when_the_player_is_in_reach() {
+        let (level, data) = world(&[
+            "................",
+            "................",
+            "################",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::PusherRobot);
+        e.x = 8;
+        e.y = 1;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d1 = DIR2_WEST;
+
+        // Player on the wrong row: paces, never shoves.
+        let mut wrong_row = Player::spawn_at(5, 0);
+        wrong_row.x = 5;
+        wrong_row.y = 0;
+        for _ in 0..50 {
+            tick_pusher_robot(&mut e, &wrong_row, &level, &data);
+            assert!(e.push_player.is_none(), "it must not shove across rows");
+        }
+
+        // Exactly three columns west of it, same row.
+        e.x = 8;
+        e.d1 = DIR2_WEST;
+        e.d2 = 0;
+        e.d4 = 0;
+        let mut in_reach = Player::spawn_at(5, 1);
+        in_reach.x = 5;
+        in_reach.y = 1;
+        tick_pusher_robot(&mut e, &in_reach, &level, &data);
+        assert_eq!(
+            e.push_player,
+            Some((-1, 0, 5, 2)),
+            "it should shove the player west"
+        );
+    }
+
+    #[test]
+    fn a_shove_carries_the_player_and_then_ends() {
+        use crate::player::Push;
+        let mut p = Player::spawn_at(10, 5);
+        p.x = 10;
+        p.y = 5;
+        p.set_push(1, 0, 5, 2, false, true);
+        assert_eq!(
+            p.push,
+            Some(Push {
+                dx: 1,
+                dy: 0,
+                speed: 2,
+                time: 0,
+                max_time: 5,
+                abortable: false,
+                blockable: true
+            })
+        );
     }
 
     #[test]
