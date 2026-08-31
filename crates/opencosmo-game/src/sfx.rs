@@ -21,7 +21,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-/// The `SND_*` numbers this remake currently triggers (sound.h:28-104).
+/// The `SND_*` numbers (sound.h:27-91), all of them - the converter
+/// produces every effect, so the only thing that ever limited which are
+/// heard is which behaviours ask for one.
 pub mod snd {
     pub const BIG_PRIZE: u16 = 1;
     pub const PLAYER_JUMP: u16 = 2;
@@ -30,16 +32,64 @@ pub mod snd {
     pub const PLAYER_HIT_HEAD: u16 = 5;
     pub const PLAYER_POUNCE: u16 = 6;
     pub const PLAYER_DEATH: u16 = 7;
+    pub const DOOR_UNLOCK: u16 = 8;
+    pub const SPIKES_MOVE: u16 = 9;
     pub const EXPLOSION: u16 = 10;
     pub const WIN_LEVEL: u16 = 11;
     pub const BARREL_DESTROY_1: u16 = 12;
     pub const PRIZE: u16 = 13;
     pub const PLAYER_HURT: u16 = 14;
+    pub const FOOT_SWITCH_MOVE: u16 = 15;
+    pub const FOOT_SWITCH_ON: u16 = 16;
+    pub const ROAMER_GIFT: u16 = 17;
+    pub const DESTROY_SATELLITE: u16 = 18;
     pub const PLAYER_FOOTSTEP: u16 = 19;
+    pub const PUSH_PLAYER: u16 = 20;
+    pub const DRIP: u16 = 21;
+    pub const PIPE_CORNER_HIT: u16 = 22;
+    pub const TRANSPORTER_ON: u16 = 23;
+    pub const SCOOTER_PUTT: u16 = 24;
+    pub const DESTROY_SOLID: u16 = 25;
+    pub const PROJECTILE_LAUNCH: u16 = 26;
+    pub const BIG_OBJECT_HIT: u16 = 27;
     pub const NO_BOMBS: u16 = 28;
     pub const PLACE_BOMB: u16 = 29;
     pub const HINT_DIALOG_ALERT: u16 = 30;
+    pub const RED_JUMPER_JUMP: u16 = 31;
+    pub const RED_JUMPER_LAND: u16 = 32;
+    pub const BGHOST_EGG_CRACK: u16 = 33;
+    pub const BGHOST_EGG_HATCH: u16 = 34;
+    pub const SAW_BLADE_MOVE: u16 = 35;
+    pub const FIREBALL_LAUNCH: u16 = 36;
+    pub const OBJECT_HIT: u16 = 37;
+    pub const EXIT_MONSTER_OPEN: u16 = 38;
+    pub const EXIT_MONSTER_INGEST: u16 = 39;
+    pub const BEAR_TRAP_CLOSE: u16 = 40;
+    pub const PAUSE_GAME: u16 = 41;
+    pub const WEEEEEEEE: u16 = 42;
+    pub const JUMP_PAD_ROBOT: u16 = 43;
+    pub const TEXT_TYPEWRITER: u16 = 44;
+    pub const BONUS_STAGE: u16 = 45;
+    pub const SHARD_BOUNCE: u16 = 46;
+    pub const TULIP_LAUNCH: u16 = 47;
+    pub const NEW_GAME: u16 = 48;
+    pub const ROCKET_BURN: u16 = 49;
+    pub const SMASH: u16 = 50;
+    pub const HIGH_SCORE_DISPLAY: u16 = 51;
+    pub const HIGH_SCORE_SET: u16 = 52;
+    pub const IVY_PLANT_RISE: u16 = 53;
+    pub const FLAME_PULSE: u16 = 54;
+    pub const BOSS_DAMAGE: u16 = 55;
+    pub const BOSS_MOVE: u16 = 56;
+    pub const SPEECH_BUBBLE: u16 = 57;
+    pub const BABY_GHOST_JUMP: u16 = 58;
+    pub const BABY_GHOST_LAND: u16 = 59;
+    pub const THUNDER: u16 = 60;
     pub const BARREL_DESTROY_2: u16 = 61;
+    pub const TULIP_INGEST: u16 = 62;
+    pub const PLANT_MOUTH_OPEN: u16 = 63;
+    pub const ENTERING_LEVEL_NUM: u16 = 64;
+    pub const BOSS_LAUNCH: u16 = 65;
 }
 
 /// One sample lasts a single `PCSpeakerService()` call at 140 Hz - see
