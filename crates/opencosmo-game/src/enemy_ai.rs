@@ -162,6 +162,15 @@ pub enum EnemyKind {
     /// `ActEpisode1End` (game1.c:5470-5482) and `ActExitLineHorizontal`
     /// (game1.c:5487-5498) - invisible trigger lines.
     TriggerLine,
+    /// `ActScooter` (game1.c:5303-5330).
+    Scooter,
+    /// `ActBearTrap` (game1.c:4933-4990).
+    BearTrap,
+    /// `ActBeamRobot` (game1.c:3280-3350) - paces, with a vertical beam
+    /// standing on its head.
+    BeamRobot,
+    /// `ActTransporter` (game1.c:4075-4130).
+    Transporter,
 }
 
 /// `TILE_SWITCH_BLOCK_1` (graphics.h:124) - the solid a monument stands as.
@@ -418,6 +427,11 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (165, EnemyKind::TriggerLine, [0, 0, 0, 0, 0]),        // ACT_EP1_END_2
     (166, EnemyKind::TriggerLine, [0, 0, 0, 0, 0]),        // ACT_EP1_END_3
     (265, EnemyKind::TriggerLine, [1, 0, 0, 0, 0]),        // ACT_EP2_END_LINE
+    (114, EnemyKind::Scooter, [0, 0, 0, 0, 0]),            // ACT_SCOOTER
+    (162, EnemyKind::BearTrap, [0, 0, 0, 0, 0]),           // ACT_BEAR_TRAP
+    (90, EnemyKind::BeamRobot, [0, 0, 0, 0, 0]),           // ACT_BEAM_ROBOT
+    (107, EnemyKind::Transporter, [0, 0, 0, 0, 1]),        // ACT_TRANSPORTER_1
+    (108, EnemyKind::Transporter, [0, 0, 0, 0, 2]),        // ACT_TRANSPORTER_2
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -488,6 +502,16 @@ impl Default for SwitchState {
     }
 }
 
+/// `activeTransporter` / `transporterTimeLeft` (game1.c:4085-4122). A
+/// transporter is inherently a pair, so the state lives outside the actors.
+#[derive(Resource, Default)]
+pub struct TransporterState {
+    /// Which pad the player stepped into (`data5`), or 0 for none.
+    pub active: i32,
+    /// Counts down from 15 while the effect plays.
+    pub time_left: i32,
+}
+
 /// A live actor running one of the ported behaviors.
 #[derive(Component)]
 pub struct Enemy {
@@ -546,6 +570,8 @@ pub struct Enemy {
     /// A shove to apply to the player this tick, as
     /// (dx, dy, max_time, speed) - see `Player::set_push`.
     pub push_player: Option<(i32, i32, u32, u32)>,
+    /// Ticks to hold the player still, raised by the bear trap.
+    pub hold_player: u32,
 }
 
 impl Enemy {
@@ -627,6 +653,7 @@ impl Enemy {
             spawns: Vec::new(),
             tile_writes: Vec::new(),
             push_player: None,
+            hold_player: 0,
         }
     }
 
@@ -663,6 +690,7 @@ impl Enemy {
             spawns: Vec::new(),
             tile_writes: Vec::new(),
             push_player: None,
+            hold_player: 0,
         }
     }
 
@@ -2182,17 +2210,30 @@ fn tick_force_field(
 /// runaway loop if a level ever leaves one unterminated.
 const FORCE_FIELD_MAX: i32 = 64;
 
-/// The cells a force field's beam currently occupies, as a rectangle in
-/// tile space: (x, top row, width, height).
-pub fn force_field_rect(e: &Enemy) -> Option<(i32, i32, i32, i32)> {
-    if e.dead || e.d1 <= 0 {
+/// The cells a beam currently occupies, as a rectangle in tile space:
+/// (x, top row, width, height). Serves the force field and the beam robot,
+/// which are the two actors that are partly a line rather than a body.
+pub fn beam_rect(e: &Enemy) -> Option<(i32, i32, i32, i32)> {
+    if e.dead {
         return None;
     }
-    if e.d5 == 0 {
-        Some((e.x, e.y - e.d1 + 1, e.width_tiles, e.d1))
-    } else {
-        Some((e.x, e.y - e.height_tiles + 1, e.d1, e.height_tiles))
+    match e.kind {
+        EnemyKind::ForceField if e.d1 > 0 => {
+            if e.d5 == 0 {
+                Some((e.x, e.y - e.d1 + 1, e.width_tiles, e.d1))
+            } else {
+                Some((e.x, e.y - e.height_tiles + 1, e.d1, e.height_tiles))
+            }
+        }
+        // The robot's beam stands on its head, starting two rows up
+        // (game1.c:3327).
+        EnemyKind::BeamRobot if e.d2 > 0 => Some((e.x + 1, e.y - e.d2 - 1, 1, e.d2)),
+        _ => None,
     }
+}
+
+fn has_beam(e: &Enemy) -> bool {
+    matches!(e.kind, EnemyKind::ForceField | EnemyKind::BeamRobot)
 }
 
 /// `ActPusherRobot` (game1.c:4488-4560). Paces at half speed until the
@@ -2367,6 +2408,109 @@ fn tick_trigger_line(e: &mut Enemy, player: &Player) -> bool {
     crossed
 }
 
+/// `ActScooter` (game1.c:5303-5330). Left alone it bobs on the spot,
+/// settling onto whatever is below it every tenth tick.
+///
+/// NOT PORTED: being ridden. Mounting it makes the scooter follow the
+/// player and the player follow the scooter's controls, which needs a
+/// vehicle state the port does not have; unridden, this is exactly what it
+/// does.
+fn tick_scooter(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.frame = (e.frame + 1) & 3;
+
+    e.d2 += 1;
+    if e.d2 % 10 != 0 {
+        return;
+    }
+    let grounded = |e: &Enemy| {
+        test_sprite_move(
+            Dir4::South, e.x, e.y + 1, e.width_tiles, e.height_tiles, level, data,
+        ) != MoveResult::Free
+    };
+    if grounded(e) {
+        e.y -= 1;
+    } else {
+        e.y += 1;
+        if grounded(e) {
+            e.y -= 1;
+        }
+    }
+}
+
+/// `ActBearTrap` (game1.c:4933-4990). Snaps shut on the player standing in
+/// it and holds them for the length of its frame table.
+///
+/// NOT PORTED: the "umph" bubble and the snap sound.
+fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
+    /// game1.c:4937 - open, then twenty-three ticks shut, then easing back
+    /// open over the last three.
+    const FRAMES: [usize; 27] = [
+        0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0,
+    ];
+
+    if e.d2 == 0 {
+        // Waiting: it catches a player standing exactly on it
+        // (game1.c:7751).
+        if e.x == player.x && e.y == player.y {
+            e.d2 = 1;
+            return FRAMES.len() as u32;
+        }
+        e.frame = 0;
+        return 0;
+    }
+
+    e.frame = FRAMES[e.d3 as usize % FRAMES.len()];
+    e.d3 += 1;
+    if e.d3 as usize == FRAMES.len() {
+        e.d3 = 0;
+        e.d2 = 0;
+    }
+    0
+}
+
+/// `ActBeamRobot` (game1.c:3280-3350). Paces at half speed under a beam
+/// that stands on its head and reaches up to nineteen cells, stopping at
+/// the ceiling. Both the robot and the beam hurt.
+///
+/// NOT PORTED: the chain of explosions and stars it leaves when destroyed.
+fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.d5 = i32::from(e.d5 == 0);
+    e.d4 += 1;
+
+    if e.d1 != 0 {
+        if e.d4 % 2 != 0 {
+            e.x -= 1;
+        }
+        adjust_actor_move(e, Dir4::West, level, data);
+        if !e.west_free {
+            e.d1 = 0;
+        }
+    } else {
+        if e.d4 % 2 != 0 {
+            e.x += 1;
+        }
+        adjust_actor_move(e, Dir4::East, level, data);
+        if !e.east_free {
+            e.d1 = 1;
+        }
+    }
+
+    // The beam: cells 2..21 above the robot, stopping at the first ceiling
+    // (game1.c:3327-3336). Stored where the force field keeps its length,
+    // so the same drawing and damage pass can serve both.
+    let mut len = 0;
+    for i in 2..21 {
+        if test_sprite_move(
+            Dir4::North, e.x + 1, e.y - i, e.width_tiles, e.height_tiles, level, data,
+        ) != MoveResult::Free
+        {
+            break;
+        }
+        len = i - 1;
+    }
+    e.d2 = len;
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -2496,6 +2640,16 @@ pub fn tick_enemies(
             EnemyKind::Monument => tick_monument(&mut e),
             EnemyKind::Satellite => tick_satellite(&mut e),
             EnemyKind::TulipLauncher => tick_tulip_launcher(&mut e),
+            EnemyKind::Scooter => tick_scooter(&mut e, &level, &data),
+            EnemyKind::BearTrap => {
+                let hold = tick_bear_trap(&mut e, player);
+                if hold > 0 {
+                    e.push_player = None;
+                    e.hold_player = hold;
+                }
+            }
+            EnemyKind::BeamRobot => tick_beam_robot(&mut e, &level, &data),
+            EnemyKind::Transporter => {}
             EnemyKind::TriggerLine => {
                 // The episode-end lines only mark the spot; the exit they
                 // stand for is driven by `ExitTrigger` in `actors.rs`.
@@ -2569,6 +2723,12 @@ pub fn spawn_queued_actors(
         if !e.tile_writes.is_empty() {
             writes.append(&mut e.tile_writes);
         }
+        if e.hold_player > 0 {
+            if let Ok(mut player) = player_q.single_mut() {
+                player.held_ticks = e.hold_player;
+            }
+            e.hold_player = 0;
+        }
         if let Some((dx, dy, max_time, speed)) = e.push_player.take() {
             if let Ok(mut player) = player_q.single_mut() {
                 // Not abortable and blockable, as the pusher robot sets it
@@ -2619,10 +2779,10 @@ pub fn draw_force_field_beams(
     mut lengths: Local<bevy::platform::collections::HashMap<Entity, i32>>,
 ) {
     for (entity, e) in &fields {
-        if e.kind != EnemyKind::ForceField {
+        if !has_beam(e) {
             continue;
         }
-        let want = if e.dead { 0 } else { e.d1 };
+        let want = beam_rect(e).map(|(_, _, w, h)| w.max(h)).unwrap_or(0);
         if lengths.get(&entity).copied() == Some(want) {
             continue;
         }
@@ -2636,8 +2796,13 @@ pub fn draw_force_field_beams(
         let Some(frame) = e.frames.first() else {
             continue;
         };
+        let Some((bx, by, bw, _)) = beam_rect(e) else {
+            continue;
+        };
         for i in 0..want {
-            let (x, y) = if e.d5 == 0 { (e.x, e.y - i) } else { (e.x + i, e.y) };
+            // Vertical beams grow upward from the bottom of the rect,
+            // horizontal ones rightward from its left edge.
+            let (x, y) = if bw == 1 { (bx, by + want - 1 - i) } else { (bx + i, by) };
             let pos = crate::level::tile_topleft_to_center(
                 x as f32,
                 (y - e.height_tiles + 1) as f32,
@@ -2665,10 +2830,10 @@ pub fn draw_force_field_beams(
         return;
     }
     for (_, e) in &fields {
-        if e.kind != EnemyKind::ForceField {
+        if !has_beam(e) {
             continue;
         }
-        let Some((bx, by, bw, bh)) = force_field_rect(e) else {
+        let Some((bx, by, bw, bh)) = beam_rect(e) else {
             continue;
         };
         let touching = crate::combat::rects_overlap(
@@ -2695,10 +2860,86 @@ pub fn draw_force_field_beams(
     }
 }
 
+/// `ActTransporter` (game1.c:4075-4130). Stepping onto a pad starts a
+/// fifteen-tick countdown; at the end the player is moved to the *other*
+/// pad and the view re-centred on them. A pad numbered 3 wins the level
+/// instead of moving anyone.
+///
+/// Cross-actor by nature - the destination is a different entity - so this
+/// is a system rather than a behavior tick.
+///
+/// NOT PORTED: the sparkles and the "whoa" bubble.
+pub fn run_transporters(
+    mut state: ResMut<TransporterState>,
+    mut player_q: Query<&mut Player>,
+    mut scroll: ResMut<crate::camera::Scroll>,
+    level: Res<CurrentLevel>,
+    pads: Query<&Enemy>,
+    mut finished: EventWriter<crate::flow::LevelFinished>,
+    stars: Res<crate::flow::Stars>,
+    mut sequence: ResMut<crate::flow::LevelSequence>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+) {
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+
+    if state.active == 0 {
+        // Look for a pad the player is standing on.
+        for e in &pads {
+            if e.kind != EnemyKind::Transporter || e.dead {
+                continue;
+            }
+            if crate::hints::touching_player(&player, e.x, e.y, e.width_tiles, e.height_tiles) {
+                state.active = e.d5;
+                state.time_left = 15;
+                break;
+            }
+        }
+        return;
+    }
+
+    if state.time_left > 1 {
+        state.time_left -= 1;
+        return;
+    }
+
+    if state.active == 3 {
+        // Pad 3 is the exit: winning through it takes the same path as any
+        // other level win (game1.c:4100).
+        sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::WIN_LEVEL));
+        let intermission = sequence.advance(stars.0);
+        finished.write(crate::flow::LevelFinished {
+            level: sequence.current().to_string(),
+            intermission,
+        });
+        state.active = 0;
+        state.time_left = 0;
+        return;
+    }
+
+    // Move to the first pad that is neither the one stepped into nor an
+    // exit pad (game1.c:4104).
+    let dest = pads.iter().find(|e| {
+        e.kind == EnemyKind::Transporter && !e.dead && e.d5 != state.active && e.d5 != 3
+    });
+    if let Some(dest) = dest {
+        player.x = dest.x + 1;
+        player.y = dest.y;
+        player.is_recoiling = false;
+        scroll.centre_on(&player, &level);
+    }
+    state.active = 0;
+    state.time_left = 0;
+}
+
 fn draws_hidden(e: &Enemy) -> bool {
     match e.kind {
         // Never drawn at all - it only spawns smoke (game1.c:5602).
         EnemyKind::SmokeEmitter => true,
+        // The pad itself is never drawn; only its copy sprite is
+        // (game1.c:4079).
+        EnemyKind::Transporter => true,
         // Trigger lines are invisible markers (game1.c:5473, 5497).
         EnemyKind::TriggerLine => true,
         // The force field's own sprite is never drawn - only its beam is,
@@ -3523,6 +3764,72 @@ mod tests {
     }
 
     #[test]
+    fn the_bear_trap_holds_the_player_it_catches() {
+        let mut e = Enemy::default_for_test(EnemyKind::BearTrap);
+        e.x = 10;
+        e.y = 10;
+
+        let mut beside = Player::spawn_at(12, 10);
+        beside.x = 12;
+        beside.y = 10;
+        assert_eq!(tick_bear_trap(&mut e, &beside), 0, "it only catches a direct step");
+
+        let mut on_it = Player::spawn_at(10, 10);
+        on_it.x = 10;
+        on_it.y = 10;
+        let hold = tick_bear_trap(&mut e, &on_it);
+        assert_eq!(hold, 27, "held for the length of the frame table");
+
+        // It runs its animation out and reopens rather than staying shut.
+        for _ in 0..27 {
+            tick_bear_trap(&mut e, &on_it);
+        }
+        assert_eq!(e.d2, 0, "the trap reopens");
+        assert_eq!(e.frame, 0, "and ends up drawn open");
+    }
+
+    #[test]
+    fn the_beam_robot_carries_a_beam_that_stops_at_the_ceiling() {
+        let (level, data) = world(&[
+            "########",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::BeamRobot);
+        e.x = 2;
+        e.y = 3;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        tick_beam_robot(&mut e, &level, &data);
+        let rect = beam_rect(&e).expect("it should have a beam");
+        let (_, top, _, h) = rect;
+        assert!(h > 0, "the beam should reach up the shaft");
+        assert!(top >= 1, "but stop below the ceiling, got top row {top}");
+    }
+
+    #[test]
+    fn a_scooter_settles_onto_the_ground_under_it() {
+        let (level, data) = world(&[
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::Scooter);
+        e.x = 1;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        for _ in 0..200 {
+            tick_scooter(&mut e, &level, &data);
+            assert!(e.y < 3, "it must not sink into the floor (y={})", e.y);
+        }
+        assert!(e.y >= 1, "and should have fallen toward it");
+    }
+
+    #[test]
     fn a_monument_needs_three_blasts_and_leaves_no_wall_behind() {
         let mut e = Enemy::default_for_test(EnemyKind::Monument);
         e.x = 5;
@@ -3687,7 +3994,7 @@ mod tests {
 
         tick_force_field(&mut e, &switches, &level, &data);
         assert_eq!(e.d1, 3, "three open rows between floor and ceiling");
-        assert_eq!(force_field_rect(&e), Some((1, 1, 1, 3)));
+        assert_eq!(beam_rect(&e), Some((1, 1, 1, 3)));
     }
 
     #[test]
@@ -3719,12 +4026,12 @@ mod tests {
         e.height_tiles = 1;
 
         tick_force_field(&mut e, &switches, &level, &data);
-        assert!(force_field_rect(&e).is_some(), "on to begin with");
+        assert!(beam_rect(&e).is_some(), "on to begin with");
 
         switches.force_fields_active = false;
         tick_force_field(&mut e, &switches, &level, &data);
         assert!(e.dead, "the switch kills them outright (game1.c:4360)");
-        assert_eq!(force_field_rect(&e), None, "and the beam goes with it");
+        assert_eq!(beam_rect(&e), None, "and the beam goes with it");
     }
 
     #[test]

@@ -83,6 +83,10 @@ pub struct Player {
     /// movement commands are ignored, which is what `blockMovementCmds`
     /// does there.
     pub push: Option<Push>,
+    /// Held in place by something - the bear trap. `blockMovementCmds` in
+    /// the original (game1.c:7753); the player can still be hurt and can
+    /// still die, they just cannot walk out.
+    pub held_ticks: u32,
     /// Stand-in for `random()`, used only for idle animation jitter.
     rng: u32,
 }
@@ -140,6 +144,7 @@ impl Player {
             idle_count: 0,
             invincible_ticks: 0,
             push: None,
+            held_ticks: 0,
             rng: 0x1337_beef,
         }
     }
@@ -474,6 +479,12 @@ pub fn move_player_tick(
         return; // frozen during the death animation, game1.c:8452
     }
     let level = &level_data.level;
+    // Held fast by a trap: the tick still runs (gravity, damage, death)
+    // but the movement commands are ignored (game1.c:7753).
+    if p.held_ticks > 0 {
+        p.held_ticks -= 1;
+        return;
+    }
     // A shove overrides the player's own commands for as long as it runs,
     // which is what `blockMovementCmds` does in the original.
     if move_player_push(

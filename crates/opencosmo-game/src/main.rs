@@ -189,6 +189,7 @@ fn main() {
         .init_resource::<hints::HintLatch>()
         .init_resource::<level::TileIndex>()
         .init_resource::<enemy_ai::SwitchState>()
+        .init_resource::<enemy_ai::TransporterState>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -264,6 +265,7 @@ fn main() {
                 // drawing and their damage live outside the tick that
                 // measures them.
                 enemy_ai::draw_force_field_beams,
+                enemy_ai::run_transporters,
             )
                 .chain()
                 .in_set(Tick::Movement),
