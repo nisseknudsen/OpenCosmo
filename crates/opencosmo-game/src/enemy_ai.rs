@@ -78,7 +78,88 @@ pub enum EnemyKind {
     SmokeEmitter,
     /// `ActDragonfly` (game1.c:4655-4675).
     Dragonfly,
+    /// `ActEyePlant` (game1.c:3468-3488) - the most numerous unported
+    /// actor in the game. It never moves and never hurts anyone; all it
+    /// does is watch, which is done entirely through frame selection.
+    EyePlant,
+    /// `ActPipeCorner` (game1.c:3052-3057) - exists only to be invisible.
+    PipeCorner,
+    /// `ActRedGreenSlime` (game1.c:2417-2461), both colours and both the
+    /// throb-only and throb-and-drip variants.
+    Slime,
+    /// `ActArrowPiston` (game1.c:2051-2083).
+    ArrowPiston,
+    /// `ActFireball` (game1.c:2089-2130).
+    Fireball,
+    /// `ActSpark` (game1.c:3418-3462) - crawls around the *outside* of a
+    /// solid, following its edge.
+    Spark,
+    /// `ActVerticalMover` (game1.c:2258-2280) - the vertical saw blade.
+    VerticalMover,
+    /// `ActHorizontalMover` (game1.c:1983-2021) - the floor-mounted sharp
+    /// robot, which pauses at each wall before turning.
+    HorizontalMover,
+    /// `ActPipeEnd` (game1.c:3860-3878) - only the inlet animates.
+    PipeEnd,
+    /// `ActHeartPlant` (game1.c:2768-2798).
+    HeartPlant,
+    /// `ActTwoTonsCrusher` (game1.c:2496-2570) - the weight that drops on
+    /// a fixed cycle rather than in response to the player.
+    TwoTonsCrusher,
+    /// `ActStoneHeadCrusher` (game1.c:2598-2652) - the one that *does*
+    /// wait for the player to walk underneath.
+    StoneHeadCrusher,
+    /// `ActSharpRobot` (game1.c:3106-3140) - runs along a ceiling.
+    SharpRobot,
+    /// `ActFlyingWisp` (game1.c:2461-2490).
+    FlyingWisp,
+    /// `ActProjectile` (game1.c:2136-2175) - what the turrets and wall
+    /// plants fire.
+    Projectile,
+    /// `ActSpittingWallPlant` (game1.c:4135-4159).
+    SpittingWallPlant,
+    /// `ActSentryRobot` (game1.c:4566-4633).
+    SentryRobot,
+    /// `ActBabyGhostEgg` (game1.c:3062-3100).
+    BabyGhostEgg,
+    /// `ActJumpingBullet` (game1.c:2570-2592).
+    JumpingBullet,
+    /// `ActWormCrate` (game1.c:4680-4726).
+    WormCrate,
+    /// `ActSplittingPlatform` (game1.c:3354-3410).
+    SplittingPlatform,
+    /// `ActDoor` (game1.c:2174-2188) - stamps itself into the map as solid
+    /// until its switch is hit.
+    Door,
+    /// `ActRocket` (game1.c:5179-5262).
+    Rocket,
+    /// `ActJumpPadRobot` (game1.c:2194-2222).
+    JumpPadRobot,
+    /// `ActIvyPlant` (game1.c:4774-4812).
+    IvyPlant,
 }
+
+/// `TILE_DOOR_BLOCK` (graphics.h:129) - what a locked door writes over
+/// itself to become solid.
+const TILE_DOOR_BLOCK: u16 = 0x3dc8;
+
+/// Map tiles these behaviors write (graphics.h:120-130).
+const TILE_EMPTY: u16 = 0x0000;
+const TILE_STRIPED_PLATFORM: u16 = 0x0050;
+const TILE_BLUE_PLATFORM: u16 = 0x3dd0;
+/// `ACT_PINK_WORM` (actor.h) - what a broken crate lets out.
+const ACT_PINK_WORM: u16 = 124;
+
+/// `ACT_PROJECTILE_W` / `_E` (actor.h:151-152), the two the shipped
+/// episodes actually fire.
+pub const ACT_PROJECTILE_W: u16 = 109;
+pub const ACT_PROJECTILE_E: u16 = 110;
+/// `ACT_BABY_GHOST` (actor.h:114) - what an egg hatches into.
+const ACT_BABY_GHOST: u16 = 65;
+
+/// `DIRP_*` (def.h:62-66) - the five directions a projectile can take.
+const DIRP_WEST: i32 = 0;
+const DIRP_EAST: i32 = 4;
 
 /// How an actor responds to being landed on: the recoil it kicks the
 /// player back with, and how many pounces it survives.
@@ -199,6 +280,68 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // sets it and is inert scenery, this one leaves it clear and falls.
     // It also spawns one row lower - see Enemy::new.
     (49, EnemyKind::Pyramid, [0, 0, 0, 0, 0]),             // ACT_PYRAMID_FALLING
+    // --- ActEyePlant (game1.c:5870-5875) ---
+    (95, EnemyKind::EyePlant, [0, 0, 0, 0, 0]),            // ACT_EYE_PLANT_FLOOR
+    (96, EnemyKind::EyePlant, [0, 0, 0, 0, DRAW_MODE_FLIPPED]), // ACT_EYE_PLANT_CEIL
+    // --- ActPipeCorner (game1.c:5804-5813) ---
+    (70, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_N
+    (71, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_S
+    (72, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_W
+    (73, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_E
+    // --- ActRedGreenSlime (game1.c:5736-5739, 6271-6274) ---
+    // The drip variants carry their home row in data2 and the drip flag in
+    // data5; `Enemy::new` seeds data2 from y, as ConstructActor does.
+    (42, EnemyKind::Slime, [0, 0, 0, 0, 0]),               // ACT_GRN_SLIME_THROB
+    (43, EnemyKind::Slime, [0, 0, 0, 0, 1]),               // ACT_GRN_SLIME_DRIP
+    (236, EnemyKind::Slime, [0, 0, 0, 0, 0]),              // ACT_RED_SLIME_THROB
+    (237, EnemyKind::Slime, [0, 0, 0, 0, 1]),              // ACT_RED_SLIME_DRIP
+    // --- ActArrowPiston (game1.c:5637-5640) ---
+    (3, EnemyKind::ArrowPiston, [0, 0, 0, 0, DIR2_WEST]),  // ACT_ARROW_PISTON_W
+    (4, EnemyKind::ArrowPiston, [0, 0, 0, 0, DIR2_EAST]),  // ACT_ARROW_PISTON_E
+    // --- ActFireball (game1.c:5643-5646) ---
+    // d2/d3 are the launch position it snaps back to; `Enemy::new` seeds
+    // them from the spawn, as ConstructActor does.
+    (5, EnemyKind::Fireball, [0, 0, 0, 0, DIR2_WEST]),     // ACT_FIREBALL_W
+    (6, EnemyKind::Fireball, [0, 0, 0, 0, DIR2_EAST]),     // ACT_FIREBALL_E
+    // --- ActSpark (game1.c:5861) ---
+    (92, EnemyKind::Spark, [0, 0, 0, 0, 0]),               // ACT_SPARK
+    // --- ActVerticalMover / ActHorizontalMover (game1.c:5682, 5822) ---
+    (20, EnemyKind::VerticalMover, [0, 0, 0, 0, 0]),       // ACT_SAW_BLADE_VERT
+    (78, EnemyKind::HorizontalMover, [8, 0, 0, 0, 1]),     // ACT_SHARP_ROBOT_FLOOR
+    // --- ActPipeEnd (game1.c:5886-5889): only the inlet (d2=1) animates ---
+    (104, EnemyKind::PipeEnd, [0, 0, 0, 0, 0]),            // ACT_PIPE_OUTLET
+    (105, EnemyKind::PipeEnd, [0, 1, 0, 0, 0]),            // ACT_PIPE_INLET
+    // --- ActReciprocatingSpikes: the east-facing variant was simply
+    // missing from this table; it is the same behavior (game1.c:5848) ---
+    (88, EnemyKind::ReciprocatingSpikes, [1, 0, 0, 0, 0]), // ACT_SPIKES_E_RECIP
+    // --- crushers, plants and ceiling runners (game1.c:5742-5825) ---
+    (55, EnemyKind::HeartPlant, [0, 0, 0, 0, 0]),          // ACT_HEART_PLANT
+    (45, EnemyKind::TwoTonsCrusher, [0, 0, 0, 0, 0]),      // ACT_TWO_TONS_CRUSHER
+    (47, EnemyKind::StoneHeadCrusher, [0, 0, 0, 0, 0]),    // ACT_STONE_HEAD_CRUSHER
+    (80, EnemyKind::SharpRobot, [0, DIR2_WEST, 0, 0, 0]),  // ACT_SHARP_ROBOT_CEIL
+    (44, EnemyKind::FlyingWisp, [0, 0, 0, 0, 0]),          // ACT_FLYING_WISP
+    // --- projectiles and the things that fire them ---
+    (109, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_WEST]), // ACT_PROJECTILE_W
+    (110, EnemyKind::Projectile, [0, 0, 0, 0, DIRP_EAST]), // ACT_PROJECTILE_E
+    (111, EnemyKind::SpittingWallPlant, [0, 0, 0, 0, 1]),  // ACT_SPIT_WALL_PLANT_E
+    (112, EnemyKind::SpittingWallPlant, [0, 0, 0, 0, 0]),  // ACT_SPIT_WALL_PLANT_W
+    (127, EnemyKind::SentryRobot, [DIR2_WEST, 0, 0, 0, 4]), // ACT_SENTRY_ROBOT
+    (74, EnemyKind::BabyGhostEgg, [0, 0, 0, 0, 1]),        // ACT_BABY_GHOST_EGG_PROX
+    (75, EnemyKind::BabyGhostEgg, [0, 0, 0, 0, 0]),        // ACT_BABY_GHOST_EGG
+    (46, EnemyKind::JumpingBullet, [0, DIR2_WEST, 0, 0, 0]), // ACT_JUMPING_BULLET
+    // --- behaviors that write to the map (game1.c:5858, 5954) ---
+    (130, EnemyKind::WormCrate, [0, 0, 0, 0, 0]),          // ACT_WORM_CRATE
+    (91, EnemyKind::SplittingPlatform, [0, 0, 0, 0, 0]),   // ACT_SPLITTING_PLATFORM
+    // --- doors (game1.c:5652): all four colours share the behavior; the
+    // colour only matters to the switch that opens them, unported ---
+    (11, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_BLUE
+    (12, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_RED
+    (13, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_GREEN
+    (14, EnemyKind::Door, [0, 0, 0, 0, 0]),                // ACT_DOOR_YELLOW
+    // --- game1.c:6124, 5673, 6005 ---
+    (188, EnemyKind::Rocket, [60, 10, 0, 0, 0]),           // ACT_ROCKET
+    (16, EnemyKind::JumpPadRobot, [0, DIR2_WEST, 0, 0, 0]), // ACT_JUMP_PAD_ROBOT
+    (145, EnemyKind::IvyPlant, [5, 0, 0, 7, 0]),           // ACT_IVY_PLANT
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -267,6 +410,14 @@ pub struct Enemy {
     pub frames: Vec<Handle<Image>>,
     /// Per-actor PRNG state - see `next_rand`.
     rng: u32,
+    /// `NewActor` requests raised by this actor's behavior this tick, as
+    /// (ACT_* id, x, y). Behaviors stay pure over `Enemy` - they queue
+    /// here, and `spawn_queued_actors` drains the queue afterwards with
+    /// the `Commands` and assets it needs.
+    pub spawns: Vec<(u16, i32, i32)>,
+    /// `SetMapTile` writes raised this tick, as (x, y, raw tile). Queued
+    /// for the same reason as `spawns`: the behaviors stay pure.
+    pub tile_writes: Vec<(i32, i32, u16)>,
 }
 
 impl Enemy {
@@ -305,6 +456,18 @@ impl Enemy {
         if kind == EnemyKind::SpittingTurret {
             data[2] = x; // d3 = spawn column, the turret's rest position
         }
+        // The dripping slime returns to where it started rather than dying
+        // off the bottom of the map, so it carries its home row - which
+        // `ConstructActor` passes as data2 (game1.c:5739, 6274).
+        if kind == EnemyKind::Slime && data[4] != 0 {
+            data[1] = y;
+        }
+        // The fireball returns to its launcher after every pass, so it
+        // carries that position in data2/data3 (game1.c:5643-5646).
+        if kind == EnemyKind::Fireball {
+            data[1] = x;
+            data[2] = y;
+        }
         Enemy {
             kind,
             pounce_hits,
@@ -331,6 +494,42 @@ impl Enemy {
             // Seed from the spawn position so each actor desynchronises
             // from its neighbours but stays deterministic across runs.
             rng: (x as u32).wrapping_mul(1973).wrapping_add((y as u32).wrapping_mul(9277)) | 1,
+            spawns: Vec::new(),
+            tile_writes: Vec::new(),
+        }
+    }
+
+    /// A bare actor for unit tests: no sprite handles, no app, no window.
+    /// The tick functions are pure over `Enemy` + the level, which is what
+    /// makes the behaviors testable without standing up Bevy at all.
+    #[cfg(test)]
+    pub fn default_for_test(kind: EnemyKind) -> Self {
+        Enemy {
+            kind,
+            x: 10,
+            y: 10,
+            frame: 0,
+            d1: 0,
+            d2: 0,
+            d3: 0,
+            d4: 0,
+            d5: 0,
+            fall_time: 0,
+            dead: false,
+            width_tiles: 2,
+            height_tiles: 2,
+            west_free: false,
+            east_free: false,
+            acrophile: false,
+            force_active: true,
+            stay_active: false,
+            pounce_hits: 0,
+            pounce_recoil: 0,
+            weighted: false,
+            frames: Vec::new(),
+            rng: 0x1234_5678,
+            spawns: Vec::new(),
+            tile_writes: Vec::new(),
         }
     }
 
@@ -832,6 +1031,851 @@ fn tick_dragonfly(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     }
 }
 
+/// `ActEyePlant` (game1.c:3468-3488). The plant never moves, never damages
+/// and never dies - the entire behavior is choosing which of six frames to
+/// draw, so that the eye follows the player across the room.
+///
+/// Frames come in two banks of three (looking west / centre / east); the
+/// second bank is the blink, picked on a 2-in-40 roll each tick. The
+/// original re-rolls *every* tick, so the blink is a single-tick flicker
+/// rather than a held pose - transcribed as-is.
+fn tick_eye_plant(e: &mut Enemy, player: &Player) {
+    // `random(40) > 37` - two of the forty outcomes, so about 5%.
+    e.d2 = if e.next_rand(40) > 37 { 3 } else { 0 };
+
+    // The dead zone is deliberately lopsided: two tiles of slack to the
+    // west against one to the east (game1.c:3479-3485).
+    e.frame = if e.x - 2 > player.x {
+        e.d2 as usize
+    } else if e.x + 1 < player.x {
+        (e.d2 + 2) as usize
+    } else {
+        (e.d2 + 1) as usize
+    };
+}
+
+/// `ActRedGreenSlime` (game1.c:2417-2461). Green and red are the same
+/// behavior with different artwork; `data5` picks between throbbing in
+/// place and throbbing then dripping down the screen.
+///
+/// NOT PORTED: the drip sound (`SND_DRIP`), which needs the sound number
+/// wired through - the motion is complete without it.
+fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
+    /// game1.c:2419 - note it holds seven entries but the throb-only path
+    /// only ever indexes the first six.
+    const THROB_FRAMES: [usize; 7] = [0, 1, 2, 3, 2, 1, 0];
+
+    if e.d5 == 0 {
+        // Throb in place forever.
+        e.frame = THROB_FRAMES[e.d3 as usize % THROB_FRAMES.len()];
+        e.d3 += 1;
+        if e.d3 == 6 {
+            e.d3 = 0;
+        }
+        return;
+    }
+
+    if e.d4 == 0 {
+        // Gathering: throb until a drop is ready to fall.
+        e.frame = THROB_FRAMES[(e.d3 as usize) % 6];
+        e.d3 += 1;
+        if e.d3 == 15 {
+            e.d4 = 1;
+            e.d3 = 0;
+            e.frame = 4;
+        }
+    } else if e.frame < 6 {
+        // Stretching away from the ceiling.
+        e.frame += 1;
+    } else {
+        // Falling. It is not killed at the bottom of the map like other
+        // actors - it returns to the ceiling row it started on and begins
+        // again, which is why `data2` holds the home row.
+        e.y += 1;
+        if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
+            e.y = e.d2;
+            e.d4 = 0;
+            e.frame = 0;
+        }
+    }
+}
+
+/// `ActArrowPiston` (game1.c:2051-2083). A 32-tick cycle that spends three
+/// ticks punching out and three pulling back, and the remaining twenty-six
+/// sitting still.
+///
+/// NOT PORTED: `SND_SPIKES_MOVE` on the two ticks it starts moving.
+fn tick_arrow_piston(e: &mut Enemy) {
+    if e.d1 < 31 {
+        e.d1 += 1;
+    } else {
+        e.d1 = 0;
+    }
+
+    // The two windows overlap in the source's `else if` chain: >28 wins
+    // over >25, so 29..31 retract and 26..28 extend.
+    let out = if e.d5 == DIR2_WEST { -1 } else { 1 };
+    if e.d1 > 28 {
+        e.x -= out;
+    } else if e.d1 > 25 {
+        e.x += out;
+    }
+}
+
+/// `ActFireball` (game1.c:2089-2130). Waits thirty ticks, then flies until
+/// it hits something or leaves the screen, and snaps back to its launcher
+/// to start again. `data2`/`data3` hold that launch position.
+///
+/// NOT PORTED: the smoke puff on impact (`NewDecoration`) and the launch
+/// and impact sounds.
+fn tick_fireball(
+    e: &mut Enemy,
+    level: &LevelJson,
+    data: &GameData,
+    scroll: &crate::camera::Scroll,
+) {
+    if e.d1 < 30 {
+        e.d1 += 1;
+    } else {
+        let dir = if e.d5 == DIR2_WEST { Dir4::West } else { Dir4::East };
+        e.x += if e.d5 == DIR2_WEST { -1 } else { 1 };
+        let blocked = test_sprite_move(dir, e.x, e.y, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free;
+        if blocked {
+            e.d1 = 0;
+            e.x = e.d2;
+            e.y = e.d3;
+        }
+    }
+
+    // Leaving the view also resets it - this actor is force-active, so
+    // without that it would keep flying forever off screen.
+    if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
+        e.d1 = 0;
+        e.x = e.d2;
+        e.y = e.d3;
+    }
+
+    e.frame = usize::from(e.frame == 0);
+}
+
+/// `ActSpark` (game1.c:3418-3462). Hugs the outside of a solid: it walks
+/// in its current direction, turns *into* a wall it meets, and turns
+/// *around* a corner it runs out of - which together trace the perimeter.
+/// Moves every other tick.
+fn tick_spark(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    const W: i32 = 0;
+    const E: i32 = 1;
+    const N: i32 = 2;
+    const S: i32 = 3;
+
+    e.d5 += 1;
+    e.frame = usize::from(e.frame == 0);
+    if e.d5 % 2 != 0 {
+        return;
+    }
+
+    let free = |x: i32, y: i32, dir: Dir4| {
+        test_sprite_move(dir, x, y, e.width_tiles, e.height_tiles, level, data) == MoveResult::Free
+    };
+
+    match e.d1 {
+        x if x == W => {
+            e.x -= 1;
+            if !free(e.x - 1, e.y, Dir4::West) {
+                e.d1 = N;
+            } else if free(e.x, e.y + 1, Dir4::South) {
+                e.d1 = S;
+            }
+        }
+        x if x == E => {
+            e.x += 1;
+            if !free(e.x + 1, e.y, Dir4::East) {
+                e.d1 = S;
+            } else if free(e.x, e.y - 1, Dir4::North) {
+                e.d1 = N;
+            }
+        }
+        x if x == N => {
+            e.y -= 1;
+            if !free(e.x, e.y - 1, Dir4::North) {
+                e.d1 = E;
+            } else if free(e.x - 1, e.y, Dir4::West) {
+                e.d1 = W;
+            }
+        }
+        _ => {
+            e.y += 1;
+            if !free(e.x, e.y + 1, Dir4::South) {
+                e.d1 = W;
+            } else if free(e.x + 1, e.y, Dir4::East) {
+                e.d1 = E;
+            }
+        }
+    }
+}
+
+/// `ActVerticalMover` (game1.c:2258-2280). Rises until the ceiling stops
+/// it, falls until the floor does.
+///
+/// NOT PORTED: `SND_SAW_BLADE_MOVE`, which the original plays every tick
+/// the blade is on screen.
+fn tick_vertical_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.frame = usize::from(e.frame == 0);
+
+    if e.d1 != DIR2_SOUTH {
+        if test_sprite_move(Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free
+        {
+            e.d1 = DIR2_SOUTH;
+        } else {
+            e.y -= 1;
+        }
+    } else if test_sprite_move(Dir4::South, e.x, e.y + 1, e.width_tiles, e.height_tiles, level, data)
+        != MoveResult::Free
+    {
+        e.d1 = DIR2_NORTH;
+    } else {
+        e.y += 1;
+    }
+}
+
+/// `ActHorizontalMover` (game1.c:1983-2021). Paces left and right at half
+/// speed, pausing `data1` ticks at each end before turning back.
+fn tick_horizontal_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    // data3 gates movement to every other tick (the saw blade forces it to
+    // 1 and so moves every tick; no saw blade uses this behavior in the
+    // shipped episodes).
+    e.d3 = i32::from(e.d3 == 0);
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    }
+    if e.d3 == 0 {
+        return;
+    }
+
+    if e.d4 == 0 {
+        if e.d2 != DIR2_WEST {
+            e.x += 1;
+            adjust_actor_move(e, Dir4::East, level, data);
+            if !e.east_free {
+                e.d2 = DIR2_WEST;
+                e.d4 = e.d1;
+            }
+        } else {
+            e.x -= 1;
+            adjust_actor_move(e, Dir4::West, level, data);
+            if !e.west_free {
+                e.d2 = DIR2_EAST;
+                e.d4 = e.d1;
+            }
+        }
+    }
+
+    e.frame += 1;
+    if e.frame as i32 > e.d5 {
+        e.frame = 0;
+    }
+}
+
+/// `ActPipeEnd` (game1.c:3860-3878). The outlet (`data2` zero) is inert;
+/// the inlet flickers between two frames.
+///
+/// NOT PORTED: the second sprite the original draws three rows below
+/// itself, which needs a decoration rather than a behavior.
+fn tick_pipe_end(e: &mut Enemy) {
+    if e.d2 == 0 {
+        return;
+    }
+    e.d1 += 1;
+    e.d3 += 1;
+    e.frame = if e.d3 % 2 != 0 { 4 } else { 0 };
+    if e.d1 == 4 {
+        e.d1 = 1;
+    }
+}
+
+/// `ActHeartPlant` (game1.c:2768-2798). Snaps open when the player is
+/// directly above it, then closes again. The lurch is done by nudging the
+/// plant a column sideways on two of its three frames.
+///
+/// NOT PORTED: `SND_PLANT_MOUTH_OPEN`.
+fn tick_heart_plant(e: &mut Enemy, player: &Player) {
+    if e.d1 == 0 && e.y > player.y && e.x == player.x {
+        e.d1 = 1;
+    }
+
+    if e.d1 != 1 {
+        return;
+    }
+
+    e.d2 += 1;
+    if e.d2 != 2 {
+        return;
+    }
+    e.d2 = 0;
+    e.frame += 1;
+
+    if e.frame == 3 {
+        e.d1 = 0;
+        e.frame = 0;
+    }
+    if e.frame == 1 {
+        e.x -= 1;
+    }
+    if e.frame == 2 {
+        e.x += 1;
+    }
+}
+
+/// `ActTwoTonsCrusher` (game1.c:2496-2570). Drops on a twenty-tick timer
+/// regardless of where the player is, accelerating 1/2/4 rows on the way
+/// down and decelerating the same way back up.
+///
+/// NOT PORTED: the impact sound, and the separate base sprite the original
+/// draws three rows below itself.
+fn tick_two_tons_crusher(e: &mut Enemy) {
+    if e.d1 < 20 {
+        e.d1 += 1;
+    }
+    if e.d1 == 19 {
+        e.d2 = 1;
+    }
+
+    if e.d2 == 1 {
+        if e.frame < 3 {
+            e.frame += 1;
+            e.d3 = match e.frame {
+                1 => 1,
+                2 => 2,
+                _ => 4,
+            };
+            e.y += e.d3;
+        } else {
+            e.d2 = 2;
+        }
+    }
+
+    if e.d2 == 2 {
+        if e.frame > 0 {
+            e.frame -= 1;
+            e.d3 = match e.frame {
+                0 => 1,
+                1 => 2,
+                _ => 4,
+            };
+            e.y -= e.d3;
+        } else {
+            e.d2 = 0;
+            e.d1 = 0;
+            e.d3 = 0;
+        }
+    }
+}
+
+/// `ActStoneHeadCrusher` (game1.c:2598-2652). Waits for the player to pass
+/// underneath, drops two rows a tick until it lands, then climbs back to
+/// where it started at half speed.
+///
+/// NOT PORTED: the impact sound and smoke puffs.
+fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    e.d4 = i32::from(e.d4 == 0);
+
+    let blocked = |e: &Enemy, level: &LevelJson, data: &GameData| {
+        test_sprite_move(Dir4::South, e.x, e.y, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free
+    };
+
+    if e.d1 == 0 {
+        // The trigger box is deliberately wide - seven columns, offset so
+        // it leads the head slightly (game1.c:2605).
+        if e.y < player.y && e.x <= player.x + 6 && e.x + 7 > player.x {
+            e.d1 = 1;
+            e.d2 = e.y; // the row to climb back to
+            e.frame = 1;
+        } else {
+            e.frame = 0;
+        }
+    } else if e.d1 == 1 {
+        e.frame = 1;
+        e.y += 1;
+        if blocked(e, level, data) {
+            e.d1 = 2;
+            e.y -= 1;
+        } else {
+            // It falls a second row in the same tick, testing again.
+            e.y += 1;
+            if blocked(e, level, data) {
+                e.d1 = 2;
+                e.y -= 1;
+            }
+        }
+    } else if e.d1 == 2 {
+        e.frame = 0;
+        if e.y == e.d2 {
+            e.d1 = 0;
+        } else if e.d4 != 0 {
+            e.y -= 1;
+        }
+    }
+}
+
+/// `ActSharpRobot` (game1.c:3106-3140). Runs along the underside of a
+/// ceiling, turning both at a wall and at the end of the ceiling - the
+/// second test is what stops it running off into open air.
+fn tick_sharp_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.d3 = i32::from(e.d3 == 0);
+    if e.d3 == 0 {
+        return;
+    }
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    } else {
+        let (step, dir) = if e.d2 == DIR2_EAST { (1, Dir4::East) } else { (-1, Dir4::West) };
+        let ahead = test_sprite_move(
+            dir, e.x + step, e.y, e.width_tiles, e.height_tiles, level, data,
+        );
+        let ceiling = test_sprite_move(
+            dir, e.x + step, e.y - 1, e.width_tiles, e.height_tiles, level, data,
+        );
+        if ahead != MoveResult::Free || ceiling == MoveResult::Free {
+            e.d4 = 4;
+            e.d2 = if e.d2 == DIR2_EAST { DIR2_WEST } else { DIR2_EAST };
+        } else {
+            e.x += step;
+        }
+    }
+
+    e.frame = usize::from(e.frame == 0);
+}
+
+/// `ActFlyingWisp` (game1.c:2461-2490). A 64-tick loop: still, then a slow
+/// climb, then a faster drop back, flipped on the way down.
+fn tick_flying_wisp(e: &mut Enemy) {
+    e.frame = usize::from(e.frame == 0);
+
+    if e.d1 < 63 {
+        e.d1 += 1;
+    } else {
+        e.d1 = 0;
+    }
+
+    if e.d1 > 50 {
+        e.y += 2;
+        if e.d1 < 55 {
+            e.y -= 1;
+        }
+    } else if e.d1 > 34 {
+        if e.d1 < 47 {
+            e.y -= 1;
+        }
+        if e.d1 < 45 {
+            e.y -= 1;
+        }
+    }
+}
+
+/// `ActProjectile` (game1.c:2136-2175). Flies in a straight line until it
+/// leaves the view, then dies. Only west and east are used by the shipped
+/// episodes' actors, but the diagonal and downward cases are the same
+/// behavior with a different step.
+///
+/// NOT PORTED: `SND_PROJECTILE_LAUNCH` on its first tick.
+fn tick_projectile(e: &mut Enemy, scroll: &crate::camera::Scroll) {
+    if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
+        e.dead = true;
+        return;
+    }
+    e.frame = usize::from(e.frame == 0);
+    match e.d5 {
+        DIRP_WEST => e.x -= 1,
+        1 => {
+            e.x -= 1;
+            e.y += 1;
+        }
+        2 => e.y += 1,
+        3 => {
+            e.x += 1;
+            e.y += 1;
+        }
+        _ => e.x += 1,
+    }
+}
+
+/// `ActSpittingWallPlant` (game1.c:4135-4159). A fifty-tick cycle that
+/// opens on tick 42 and spits on tick 45.
+fn tick_spitting_wall_plant(e: &mut Enemy) {
+    e.d4 += 1;
+
+    if e.d4 == 50 {
+        e.d4 = 0;
+        e.frame = 0;
+    }
+    if e.d4 == 42 {
+        e.frame = 1;
+    }
+    if e.d4 == 45 {
+        e.frame = 2;
+        // d5 carries the facing; the projectile appears clear of the
+        // plant's own tiles on the side it faces (game1.c:4152-4156).
+        if e.d5 == 0 {
+            e.spawns.push((ACT_PROJECTILE_W, e.x - 1, e.y - 1));
+        } else {
+            e.spawns.push((ACT_PROJECTILE_E, e.x + 4, e.y - 1));
+        }
+    }
+}
+
+/// `ActSentryRobot` (game1.c:4566-4633). Paces at half speed and, while
+/// the lights are on, occasionally stops to aim and fire at the player.
+///
+/// NOT PORTED: the `areLightsActive` gate, which belongs to the light
+/// switch - unported, and its absence leaves the robot always willing to
+/// fire, which is the lights-on behavior.
+fn tick_sentry_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    e.d3 = i32::from(e.d3 == 0);
+    if e.d3 != 0 {
+        return;
+    }
+
+    // `GameRand() % 50 > 48` - one outcome in fifty.
+    if e.next_rand(50) > 48 && e.d4 == 0 {
+        e.d4 = 10;
+    }
+
+    if e.d4 != 0 {
+        e.d2 = i32::from(e.d2 == 0);
+        e.d4 -= 1;
+
+        if e.d4 == 1 {
+            e.d1 = if e.x + 1 > player.x { DIR2_WEST } else { DIR2_EAST };
+            if e.d1 != DIR2_WEST {
+                e.spawns.push((ACT_PROJECTILE_E, e.x + 3, e.y - 1));
+            } else {
+                e.spawns.push((ACT_PROJECTILE_W, e.x - 1, e.y - 1));
+            }
+        }
+
+        e.frame = match (e.d1 != DIR2_WEST, e.d2 != 0) {
+            (true, true) => 5,
+            (true, false) => 0,
+            (false, true) => 6,
+            (false, false) => 2,
+        };
+        return;
+    }
+
+    // Not firing: pace.
+    if e.d1 == DIR2_WEST {
+        e.x -= 1;
+        adjust_actor_move(e, Dir4::West, level, data);
+        if !e.west_free {
+            e.d1 = DIR2_EAST;
+        }
+    } else {
+        e.x += 1;
+        adjust_actor_move(e, Dir4::East, level, data);
+        if !e.east_free {
+            e.d1 = DIR2_WEST;
+        }
+    }
+    e.frame = if e.d1 == DIR2_WEST { 2 } else { 0 };
+}
+
+/// `ActBabyGhostEgg` (game1.c:3062-3100). Sits and jiggles until the
+/// player comes near, then cracks for twenty ticks and hatches.
+///
+/// `data5` selects the trigger: the plain egg hatches when the player is
+/// level with or below it and within its column range; the `_PROX` variant
+/// never triggers on proximity at all (game1.c:3079).
+///
+/// NOT PORTED: the shell shards and the crack/hatch sounds.
+fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
+    if e.d2 != 0 {
+        e.frame = 2;
+    } else if e.next_rand(70) == 0 && e.d3 == 0 {
+        e.d3 = 2;
+    } else {
+        e.frame = 0;
+    }
+
+    if e.d3 != 0 {
+        e.d3 -= 1;
+        e.frame = 1;
+    }
+
+    if e.d5 == 0 && e.d1 == 0 && e.y <= player.y && e.x - 6 < player.x && e.x + 4 > player.x {
+        e.d1 = 1;
+        e.d2 = 20;
+    }
+
+    if e.d2 > 1 {
+        e.d2 -= 1;
+    } else if e.d2 == 1 {
+        e.dead = true;
+        e.spawns.push((ACT_BABY_GHOST, e.x, e.y));
+    }
+}
+
+/// `ActJumpingBullet` (game1.c:2570-2592). Bounces along a fixed sixteen
+/// step arc, reversing direction at the end of each one.
+fn tick_jumping_bullet(e: &mut Enemy) {
+    /// game1.c:2572 - the arc, as per-tick row offsets.
+    const Y_JUMP: [i32; 16] = [-2, -2, -2, -2, -1, -1, -1, 0, 0, 1, 1, 1, 2, 2, 2, 2];
+
+    if e.d2 == DIR2_WEST {
+        e.x -= 1;
+    } else {
+        e.x += 1;
+    }
+
+    e.y += Y_JUMP[e.d3 as usize % Y_JUMP.len()];
+    e.d3 += 1;
+
+    if e.d3 == 16 {
+        e.d2 = i32::from(e.d2 == 0);
+        e.d3 = 0;
+    }
+}
+
+/// `ActWormCrate` (game1.c:4680-4726). Lays a four-tile platform across
+/// its own top, falls until something stops it, and breaks open when a
+/// blast reaches it - letting out a pink worm.
+///
+/// NOT PORTED: the shards and the destruction sound. The explosion delay
+/// `data5` is seeded per-crate in the original from `GameRand`; here it
+/// comes from the actor's own PRNG on first tick, for the same effect.
+fn tick_worm_crate(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d4 == 0 {
+        // First tick: stamp the platform the player can stand on.
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 2, TILE_STRIPED_PLATFORM));
+        }
+        e.d4 = 1;
+        return;
+    }
+
+    let free_below = test_sprite_move(
+        Dir4::South,
+        e.x,
+        e.y + 1,
+        e.width_tiles,
+        e.height_tiles,
+        level,
+        data,
+    ) == MoveResult::Free;
+
+    if free_below {
+        // Falling: the platform travels with it.
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 2, TILE_EMPTY));
+        }
+        e.y += 1;
+        let landed = test_sprite_move(
+            Dir4::South,
+            e.x,
+            e.y + 1,
+            e.width_tiles,
+            e.height_tiles,
+            level,
+            data,
+        ) != MoveResult::Free;
+        if landed {
+            for i in 0..4 {
+                e.tile_writes.push((e.x + i, e.y - 2, TILE_STRIPED_PLATFORM));
+            }
+        }
+    }
+}
+
+/// Breaks a worm crate open. Called by the blast code rather than by the
+/// crate's own tick, which is where the original tests `IsNearExplosion`.
+pub fn burst_worm_crate(e: &mut Enemy) {
+    if e.dead {
+        return;
+    }
+    e.dead = true;
+    for i in 0..4 {
+        e.tile_writes.push((e.x + i, e.y - 2, TILE_EMPTY));
+    }
+    e.spawns.push((ACT_PINK_WORM, e.x, e.y));
+}
+
+/// `ActSplittingPlatform` (game1.c:3354-3410). Holds a four-tile platform
+/// until the player stands on it, then pulls apart and drops them, and
+/// finally closes again.
+///
+/// The original keeps its half-speed counter in the `westfree` field,
+/// which it borrows as an extra data word - noted because it looks like a
+/// collision flag and is not one.
+fn tick_splitting_platform(e: &mut Enemy, player: &Player) {
+    e.d3 += 1; // the original's borrowed `westfree`
+
+    if e.d1 == 0 {
+        e.d1 = 1;
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 1, TILE_BLUE_PLATFORM));
+        }
+    } else if e.d1 == 1 && e.y - 2 == player.y {
+        // Either the player's left or right edge over the platform's span.
+        let over = (e.x <= player.x && e.x + 3 >= player.x)
+            || (e.x <= player.x + 2 && e.x + 3 >= player.x + 2);
+        if over {
+            e.d1 = 2;
+            e.d2 = 0;
+        }
+    } else if e.d1 == 2 {
+        if e.d3 % 2 != 0 {
+            e.d2 += 1;
+        }
+        if e.d2 == 5 {
+            // The halves have pulled apart far enough to drop through.
+            for i in 0..4 {
+                e.tile_writes.push((e.x + i, e.y - 1, TILE_EMPTY));
+            }
+        }
+        if e.d2 == 7 {
+            e.d1 = 3;
+            e.d2 = 0;
+        }
+    }
+
+    if e.d1 == 3 {
+        if e.d3 % 2 != 0 {
+            e.d2 += 1;
+        }
+        if e.d2 == 3 {
+            // Closed again; the next tick re-lays the platform.
+            e.d1 = 0;
+        }
+    }
+}
+
+/// `ActDoor` (game1.c:2174-2188). Writes five rows of solid door tile up
+/// its own column on the first tick and then does nothing - the door *is*
+/// the map change, which is why walking into one is stopped by ordinary
+/// tile collision rather than by any actor test.
+///
+/// NOT PORTED: `UpdateDoors` restoring the tiles it overwrote when the
+/// matching head switch is pounced. The original saves them in data1..5
+/// for exactly that; without the switch the door simply stays locked.
+fn tick_door(e: &mut Enemy) {
+    if e.d1 != 0 {
+        return;
+    }
+    e.d1 = 1;
+    for y in 0..5 {
+        e.tile_writes.push((e.x + 1, e.y - y, TILE_DOOR_BLOCK));
+    }
+}
+
+/// `ActRocket` (game1.c:5179-5262). Sits on a sixty-tick fuse, then climbs
+/// until it hits a ceiling and destroys itself. Riding it is the point:
+/// the original shoves the player up with it, which needs player state the
+/// port does not have, so this flies without a passenger.
+///
+/// NOT PORTED: the exhaust smoke, the sounds, the shards and the two
+/// explosions it leaves, and carrying the player.
+fn tick_rocket(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d1 != 0 {
+        e.d1 -= 1;
+        return;
+    }
+
+    if e.d2 != 0 {
+        if e.d2 > 1 {
+            e.d2 -= 1;
+        }
+        // Below ten it climbs a row a tick, and below five a second row in
+        // the same tick - which is the acceleration off the pad.
+        for _ in 0..2 {
+            if e.d2 >= 10 {
+                break;
+            }
+            if e.d2 < 10 {
+                if test_sprite_move(
+                    Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data,
+                ) == MoveResult::Free
+                {
+                    e.y -= 1;
+                } else {
+                    e.d5 = 1;
+                }
+            }
+            if e.d2 >= 5 {
+                break;
+            }
+        }
+        e.d4 = i32::from(e.d4 == 0);
+    }
+
+    if e.d5 != 0 {
+        e.dead = true;
+    }
+}
+
+/// `ActJumpPadRobot` (game1.c:2194-2222). Paces, and holds a crouched
+/// frame for `data1` ticks after it has been bounced on.
+fn tick_jump_pad_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d1 > 0 {
+        e.frame = 2;
+        e.d1 -= 1;
+        return;
+    }
+
+    e.frame = usize::from(e.frame == 0);
+    if e.d2 != DIR2_WEST {
+        e.x += 1;
+        adjust_actor_move(e, Dir4::East, level, data);
+        if !e.east_free {
+            e.d2 = DIR2_WEST;
+        }
+    } else {
+        e.x -= 1;
+        adjust_actor_move(e, Dir4::West, level, data);
+        if !e.west_free {
+            e.d2 = DIR2_EAST;
+        }
+    }
+}
+
+/// `ActIvyPlant` (game1.c:4774-4812). Idles for `data1` ticks, then climbs
+/// its seven rows one at a time, animating as it goes. A blast sends it
+/// back down.
+///
+/// NOT PORTED: `SND_IVY_PLANT_RISE`.
+fn tick_ivy_plant(e: &mut Enemy) {
+    if e.d2 != 0 {
+        // Falling back down after a blast.
+        e.y += 1;
+        e.d4 += 1;
+        if e.d4 == 7 {
+            e.d2 = 0;
+            e.d3 = 0;
+            e.d1 = 12;
+        }
+        return;
+    }
+
+    if e.d3 < e.d1 {
+        e.d3 += 1;
+        return;
+    }
+
+    e.d5 = i32::from(e.d5 == 0);
+    e.frame += 1;
+    if e.frame == 4 {
+        e.frame = 0;
+    }
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+        e.y -= 1;
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -923,6 +1967,35 @@ pub fn tick_enemies(
             EnemyKind::RedJumper => tick_red_jumper(&mut e, player, &level, &data),
             EnemyKind::SmokeEmitter => tick_smoke_emitter(&mut e),
             EnemyKind::Dragonfly => tick_dragonfly(&mut e, &level, &data),
+            EnemyKind::EyePlant => tick_eye_plant(&mut e, player),
+            EnemyKind::ArrowPiston => tick_arrow_piston(&mut e),
+            EnemyKind::Fireball => tick_fireball(&mut e, &level, &data, &scroll),
+            EnemyKind::Spark => tick_spark(&mut e, &level, &data),
+            EnemyKind::VerticalMover => tick_vertical_mover(&mut e, &level, &data),
+            EnemyKind::HorizontalMover => tick_horizontal_mover(&mut e, &level, &data),
+            EnemyKind::PipeEnd => tick_pipe_end(&mut e),
+            EnemyKind::HeartPlant => tick_heart_plant(&mut e, player),
+            EnemyKind::TwoTonsCrusher => tick_two_tons_crusher(&mut e),
+            EnemyKind::StoneHeadCrusher => {
+                tick_stone_head_crusher(&mut e, player, &level, &data)
+            }
+            EnemyKind::SharpRobot => tick_sharp_robot(&mut e, &level, &data),
+            EnemyKind::FlyingWisp => tick_flying_wisp(&mut e),
+            EnemyKind::Projectile => tick_projectile(&mut e, &scroll),
+            EnemyKind::SpittingWallPlant => tick_spitting_wall_plant(&mut e),
+            EnemyKind::SentryRobot => tick_sentry_robot(&mut e, player, &level, &data),
+            EnemyKind::BabyGhostEgg => tick_baby_ghost_egg(&mut e, player),
+            EnemyKind::JumpingBullet => tick_jumping_bullet(&mut e),
+            EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
+            EnemyKind::SplittingPlatform => tick_splitting_platform(&mut e, player),
+            EnemyKind::Door => tick_door(&mut e),
+            EnemyKind::Rocket => tick_rocket(&mut e, &level, &data),
+            EnemyKind::JumpPadRobot => tick_jump_pad_robot(&mut e, &level, &data),
+            EnemyKind::IvyPlant => tick_ivy_plant(&mut e),
+            EnemyKind::Slime => tick_slime(&mut e, &scroll),
+            // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
+            // (game1.c:3052-3057).
+            EnemyKind::PipeCorner => {}
         }
 
         // Presentation. `frame` is clamped rather than trusted: a few
@@ -962,10 +2035,58 @@ pub fn tick_enemies(
 }
 
 /// Actors the original marks `DRAW_MODE_HIDDEN` for this tick.
+/// Drains the `NewActor` requests behaviors queued this tick and builds
+/// the entities. Separate from `tick_enemies` so the behaviors themselves
+/// stay pure functions over `Enemy` - which is what lets every one of them
+/// be unit tested without an app, a window or an audio device.
+pub fn spawn_queued_actors(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    data: Res<GameData>,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    mut tile_index: ResMut<crate::level::TileIndex>,
+    mut current: ResMut<CurrentLevel>,
+    mut query: Query<&mut Enemy>,
+) {
+    // Collected first so the borrow on the query ends before spawning,
+    // which would otherwise conflict with the new entities.
+    let mut requests = Vec::new();
+    let mut writes = Vec::new();
+    for mut e in &mut query {
+        if !e.spawns.is_empty() {
+            requests.append(&mut e.spawns);
+        }
+        if !e.tile_writes.is_empty() {
+            writes.append(&mut e.tile_writes);
+        }
+    }
+    if let Some(tileset) = tileset {
+        for (x, y, raw) in writes {
+            crate::level::set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                y,
+                raw,
+            );
+        }
+    }
+    for (act_type, x, y) in requests {
+        crate::actors::spawn_one_actor(&mut commands, &asset_server, &data, act_type, x, y);
+    }
+}
+
 fn draws_hidden(e: &Enemy) -> bool {
     match e.kind {
         // Never drawn at all - it only spawns smoke (game1.c:5602).
         EnemyKind::SmokeEmitter => true,
+        // The pipe corners exist purely to be invisible: the artwork is
+        // already in the map tiles, and the actor only marks the corner
+        // (game1.c:3052-3057).
+        EnemyKind::PipeCorner => true,
         // Hidden for the whole cooldown between pulses (game1.c:5565).
         EnemyKind::FlamePulse => e.d1 != 0,
         _ => false,
@@ -980,6 +2101,11 @@ fn flips_vertically(e: &Enemy) -> bool {
         // ActClamPlant (game1.c:3148) takes its draw mode straight from
         // data5, which the ceiling-mounted variant sets to FLIPPED.
         EnemyKind::ClamPlant => e.d5 == DRAW_MODE_FLIPPED,
+        // The ceiling-mounted eye plant is the floor one upside down
+        // (game1.c:5874).
+        EnemyKind::EyePlant => e.d5 == DRAW_MODE_FLIPPED,
+        // The wisp flips for the falling half of its loop (game1.c:2478).
+        EnemyKind::FlyingWisp => e.d1 > 50,
         // ActPyramid (game1.c:2661-2662) flips the floor-mounted variant.
         EnemyKind::Pyramid => e.d5 != 0,
         // ActJumpPad (game1.c:2038) flips the ceiling-mounted variant.
@@ -1606,6 +2732,695 @@ fn tick_pyramid(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameDa
 mod tests {
     use super::*;
     use crate::camera::{SCROLL_H, SCROLL_W};
+
+    /// Builds a level out of ASCII art: `#` is solid, anything else empty.
+    /// Rows are equal length. This is the whole test rig - the behaviors
+    /// are pure over `Enemy` + `LevelJson` + `GameData`, so nothing here
+    /// touches Bevy, a window, or the audio device.
+    fn world(rows: &[&str]) -> (LevelJson, GameData) {
+        const SOLID: u16 = 8; // attr index 8/8 = 1
+        let width = rows[0].len();
+        let mut tiles = Vec::with_capacity(width * rows.len());
+        for row in rows {
+            assert_eq!(row.len(), width, "test world rows must be equal length");
+            tiles.extend(row.chars().map(|c| if c == '#' { SOLID } else { 0 }));
+        }
+        let level = LevelJson {
+            name: "test".into(),
+            width,
+            height: rows.len(),
+            tiles,
+            actors: Vec::new(),
+            backdrop: None,
+            music: None,
+            has_h_scroll_backdrop: false,
+            has_v_scroll_backdrop: false,
+        };
+        let mut tile_attrs = vec![0u8; 16];
+        tile_attrs[1] = TILE_ATTR_BLOCK_SOUTH
+            | TILE_ATTR_BLOCK_NORTH
+            | TILE_ATTR_BLOCK_WEST
+            | TILE_ATTR_BLOCK_EAST;
+        let data = GameData {
+            root: std::path::PathBuf::new(),
+            asset_prefix: String::new(),
+            episode: 1,
+            tileset: crate::data::TilesetJson {
+                tile_size: 8,
+                atlas_cols: 1,
+                solid_tile_count: 1,
+                masked_tile_count: 0,
+            },
+            tile_attrs,
+        };
+        (level, data)
+    }
+
+    #[test]
+    fn the_arrow_piston_returns_to_where_it_started() {
+        // A 32-tick cycle that punches out and pulls back must be a closed
+        // loop - a piston that drifted a tile per cycle would walk off.
+        for dir in [DIR2_WEST, DIR2_EAST] {
+            let mut e = Enemy::default_for_test(EnemyKind::ArrowPiston);
+            e.d5 = dir;
+            let start = e.x;
+            let mut extreme = e.x;
+            for _ in 0..32 {
+                tick_arrow_piston(&mut e);
+                if (e.x - start).abs() > (extreme - start).abs() {
+                    extreme = e.x;
+                }
+            }
+            assert_eq!(e.x, start, "dir {dir}: piston drifted over one cycle");
+            assert_eq!(
+                (extreme - start).abs(),
+                3,
+                "dir {dir}: it should reach three tiles out"
+            );
+        }
+        // ...and it extends the way it is aimed.
+        let mut w = Enemy::default_for_test(EnemyKind::ArrowPiston);
+        w.d5 = DIR2_WEST;
+        for _ in 0..28 {
+            tick_arrow_piston(&mut w);
+        }
+        assert!(w.x < 10, "the west-facing piston must punch west");
+    }
+
+    #[test]
+    fn the_fireball_waits_then_flies_and_resets_on_impact() {
+        // Open corridor with a wall to the west.
+        let (level, data) = world(&[
+            "..........",
+            "#....o....",
+            "##########",
+        ]);
+        let scroll = crate::camera::Scroll::default();
+        let mut e = Enemy::default_for_test(EnemyKind::Fireball);
+        e.x = 5;
+        e.y = 1;
+        e.d2 = 5;
+        e.d3 = 1;
+        e.d5 = DIR2_WEST;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        for _ in 0..30 {
+            tick_fireball(&mut e, &level, &data, &scroll);
+        }
+        assert_eq!(e.x, 5, "it should still be waiting on its launcher");
+
+        let mut min_x = e.x;
+        for _ in 0..40 {
+            tick_fireball(&mut e, &level, &data, &scroll);
+            min_x = min_x.min(e.x);
+        }
+        assert!(min_x < 5, "it should have flown west");
+        assert_eq!((e.x, e.y), (5, 1), "and snapped back to its launcher");
+    }
+
+    #[test]
+    fn the_saw_blade_bounces_between_floor_and_ceiling() {
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::VerticalMover);
+        e.x = 1;
+        e.y = 2;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        let mut rows = std::collections::BTreeSet::new();
+        for _ in 0..60 {
+            tick_vertical_mover(&mut e, &level, &data);
+            rows.insert(e.y);
+        }
+        assert_eq!(
+            rows,
+            [1, 2, 3].into_iter().collect(),
+            "it should sweep the open rows and never enter a wall"
+        );
+    }
+
+    #[test]
+    fn the_spark_crawls_around_a_block_instead_of_through_it() {
+        let (level, data) = world(&[
+            "........",
+            "..####..",
+            "..####..",
+            "........",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::Spark);
+        e.x = 2;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        for _ in 0..200 {
+            tick_spark(&mut e, &level, &data);
+            let inside = (2..6).contains(&e.x) && (1..3).contains(&e.y);
+            assert!(!inside, "the spark entered the solid at ({}, {})", e.x, e.y);
+        }
+    }
+
+    #[test]
+    fn only_the_pipe_inlet_animates() {
+        let mut outlet = Enemy::default_for_test(EnemyKind::PipeEnd);
+        outlet.d2 = 0;
+        let mut inlet = Enemy::default_for_test(EnemyKind::PipeEnd);
+        inlet.d2 = 1;
+        let mut inlet_frames = std::collections::BTreeSet::new();
+        for _ in 0..10 {
+            tick_pipe_end(&mut outlet);
+            tick_pipe_end(&mut inlet);
+            inlet_frames.insert(inlet.frame);
+        }
+        assert_eq!(outlet.frame, 0, "the outlet is inert");
+        assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn a_door_makes_itself_solid_once_and_only_once() {
+        let mut e = Enemy::default_for_test(EnemyKind::Door);
+        e.x = 4;
+        e.y = 9;
+        tick_door(&mut e);
+        assert_eq!(
+            e.tile_writes,
+            (0..5).map(|y| (5, 9 - y, TILE_DOOR_BLOCK)).collect::<Vec<_>>(),
+            "a door is five rows of solid tile in the column beside it"
+        );
+        e.tile_writes.clear();
+        for _ in 0..50 {
+            tick_door(&mut e);
+        }
+        assert!(
+            e.tile_writes.is_empty(),
+            "it must not rewrite the map every tick"
+        );
+    }
+
+    #[test]
+    fn the_rocket_waits_out_its_fuse_then_climbs_until_it_hits_something() {
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::Rocket);
+        e.x = 1;
+        e.y = 4;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d1 = 60;
+        e.d2 = 10;
+
+        for _ in 0..60 {
+            tick_rocket(&mut e, &level, &data);
+        }
+        assert_eq!(e.y, 4, "it should still be on the pad during the fuse");
+
+        for _ in 0..40 {
+            if e.dead {
+                break;
+            }
+            tick_rocket(&mut e, &level, &data);
+        }
+        assert!(e.dead, "it should destroy itself against the ceiling");
+        assert!(e.y >= 1, "and not fly through it, ending at {}", e.y);
+    }
+
+    #[test]
+    fn the_ivy_plant_climbs_then_returns_after_a_blast() {
+        let mut e = Enemy::default_for_test(EnemyKind::IvyPlant);
+        e.y = 20;
+        e.d1 = 5;
+        e.d4 = 7; // seven rows to climb, as ConstructActor seeds it
+        for _ in 0..40 {
+            tick_ivy_plant(&mut e);
+        }
+        assert_eq!(e.y, 13, "it should have climbed its seven rows");
+
+        e.d2 = 1; // blasted
+        for _ in 0..10 {
+            tick_ivy_plant(&mut e);
+        }
+        assert_eq!(e.y, 20, "and dropped all the way back");
+    }
+
+    #[test]
+    fn the_worm_crate_lays_a_platform_and_carries_it_down() {
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::WormCrate);
+        e.x = 1;
+        e.y = 1;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        tick_worm_crate(&mut e, &level, &data);
+        assert_eq!(
+            e.tile_writes,
+            (0..4)
+                .map(|i| (1 + i, -1, TILE_STRIPED_PLATFORM))
+                .collect::<Vec<_>>(),
+            "first tick lays a four-tile platform across its top"
+        );
+        e.tile_writes.clear();
+
+        // Falling: it clears the old row and re-lays on landing.
+        for _ in 0..10 {
+            tick_worm_crate(&mut e, &level, &data);
+        }
+        assert_eq!(e.y, 3, "it should come to rest on the floor");
+        let last = e.tile_writes.last().expect("it should have written tiles");
+        assert_eq!(last.2, TILE_STRIPED_PLATFORM, "and re-lay on landing");
+    }
+
+    #[test]
+    fn bursting_a_crate_clears_its_platform_and_frees_a_worm() {
+        let mut e = Enemy::default_for_test(EnemyKind::WormCrate);
+        e.x = 5;
+        e.y = 9;
+        burst_worm_crate(&mut e);
+        assert!(e.dead);
+        assert_eq!(e.spawns, vec![(ACT_PINK_WORM, 5, 9)]);
+        assert!(
+            e.tile_writes.iter().all(|(_, _, raw)| *raw == TILE_EMPTY),
+            "the platform must be cleared, or it would hang in mid-air"
+        );
+        // Bursting twice must not release two worms.
+        let spawned = e.spawns.len();
+        burst_worm_crate(&mut e);
+        assert_eq!(e.spawns.len(), spawned);
+    }
+
+    #[test]
+    fn the_splitting_platform_only_opens_under_the_player() {
+        let mut e = Enemy::default_for_test(EnemyKind::SplittingPlatform);
+        e.x = 10;
+        e.y = 10;
+
+        let mut away = Player::spawn_at(40, 8);
+        away.x = 40;
+        away.y = 8;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &away);
+        }
+        assert_eq!(e.d1, 1, "it should stay closed with nobody on it");
+
+        // Standing on it: the player's row is two above the actor's.
+        let mut on = Player::spawn_at(11, 8);
+        on.x = 11;
+        on.y = 8;
+        let mut cleared = false;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &on);
+            cleared |= e
+                .tile_writes
+                .iter()
+                .any(|(_, _, raw)| *raw == TILE_EMPTY);
+        }
+        assert!(cleared, "it should drop the player through");
+        // ...and eventually re-lay itself.
+        let mut relaid = false;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &away);
+            relaid |= e
+                .tile_writes
+                .iter()
+                .any(|(_, _, raw)| *raw == TILE_BLUE_PLATFORM);
+        }
+        assert!(relaid, "the platform must come back");
+    }
+
+    #[test]
+    fn the_wall_plant_spits_once_per_cycle_on_the_side_it_faces() {
+        for (facing, expect) in [(0u8, ACT_PROJECTILE_W), (1, ACT_PROJECTILE_E)] {
+            let mut e = Enemy::default_for_test(EnemyKind::SpittingWallPlant);
+            e.d5 = facing as i32;
+            let mut fired = Vec::new();
+            for _ in 0..150 {
+                tick_spitting_wall_plant(&mut e);
+                fired.append(&mut e.spawns);
+            }
+            assert_eq!(fired.len(), 3, "one shot per fifty-tick cycle");
+            assert!(
+                fired.iter().all(|(a, ..)| *a == expect),
+                "facing {facing} fired the wrong way: {fired:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_projectile_flies_straight_and_dies_off_screen() {
+        let scroll = crate::camera::Scroll::default();
+        let mut e = Enemy::default_for_test(EnemyKind::Projectile);
+        e.d5 = DIRP_EAST;
+        e.x = 5;
+        let start_y = e.y;
+        for _ in 0..10 {
+            tick_projectile(&mut e, &scroll);
+        }
+        assert_eq!(e.x, 15, "it should have flown ten columns east");
+        assert_eq!(e.y, start_y, "and not drifted vertically");
+        assert!(!e.dead);
+
+        // Carried past the edge of the view, it dies rather than flying on.
+        for _ in 0..200 {
+            tick_projectile(&mut e, &scroll);
+        }
+        assert!(e.dead, "a projectile must not outlive the screen");
+    }
+
+    #[test]
+    fn the_sentry_robot_fires_toward_the_player() {
+        let (level, data) = world(&[
+            "................",
+            "................",
+            "################",
+        ]);
+        let fire_dir = |player_x: i32| {
+            let mut e = Enemy::default_for_test(EnemyKind::SentryRobot);
+            e.x = 8;
+            e.y = 1;
+            e.width_tiles = 1;
+            e.height_tiles = 1;
+            let mut p = Player::spawn_at(player_x, 1);
+            p.x = player_x;
+            p.y = 1;
+            for _ in 0..4000 {
+                tick_sentry_robot(&mut e, &p, &level, &data);
+                if let Some((act, ..)) = e.spawns.first() {
+                    return *act;
+                }
+            }
+            panic!("the sentry never fired in 4000 ticks");
+        };
+        assert_eq!(fire_dir(1), ACT_PROJECTILE_W, "player west -> fire west");
+        assert_eq!(fire_dir(15), ACT_PROJECTILE_E, "player east -> fire east");
+    }
+
+    #[test]
+    fn the_egg_hatches_into_a_baby_ghost_when_approached() {
+        let mut e = Enemy::default_for_test(EnemyKind::BabyGhostEgg);
+        e.x = 10;
+        e.y = 10;
+
+        // Nobody near: it sits there indefinitely.
+        let mut away = Player::spawn_at(40, 10);
+        away.x = 40;
+        away.y = 10;
+        for _ in 0..100 {
+            tick_baby_ghost_egg(&mut e, &away);
+        }
+        assert!(!e.dead, "it should not hatch with nobody near");
+        assert!(e.spawns.is_empty());
+
+        let mut near = Player::spawn_at(8, 12);
+        near.x = 8;
+        near.y = 12;
+        for _ in 0..40 {
+            // `tick_enemies` skips dead actors, so stop when it dies -
+            // otherwise this would hatch the same egg over and over.
+            if e.dead {
+                break;
+            }
+            tick_baby_ghost_egg(&mut e, &near);
+        }
+        assert!(e.dead, "it should have hatched");
+        assert_eq!(e.spawns, vec![(ACT_BABY_GHOST, 10, 10)]);
+    }
+
+    #[test]
+    fn the_prox_egg_ignores_a_passing_player() {
+        // data5 = 1 disables the proximity trigger entirely
+        // (game1.c:3079) - it is hatched by other means.
+        let mut e = Enemy::default_for_test(EnemyKind::BabyGhostEgg);
+        e.d5 = 1;
+        let mut near = Player::spawn_at(8, 12);
+        near.x = 8;
+        near.y = 12;
+        for _ in 0..200 {
+            tick_baby_ghost_egg(&mut e, &near);
+        }
+        assert!(!e.dead, "the _PROX variant must not hatch on proximity");
+    }
+
+    #[test]
+    fn the_jumping_bullet_arcs_and_reverses() {
+        let mut e = Enemy::default_for_test(EnemyKind::JumpingBullet);
+        e.d2 = DIR2_WEST;
+        e.x = 50;
+        let start_y = e.y;
+        for _ in 0..16 {
+            tick_jumping_bullet(&mut e);
+        }
+        // The arc sums to zero, so one bounce returns to the start row.
+        assert_eq!(e.y, start_y, "the arc must close");
+        assert_eq!(e.x, 34, "and it travels sixteen columns per bounce");
+        assert_eq!(e.d2, DIR2_EAST, "then turns around");
+    }
+
+    #[test]
+    fn the_two_tons_crusher_returns_to_its_rest_height() {
+        // It accelerates 1/2/4 down and decelerates the same way up, so the
+        // two halves must cancel exactly or it would walk down the screen.
+        let mut e = Enemy::default_for_test(EnemyKind::TwoTonsCrusher);
+        let rest = e.y;
+        let mut lowest = e.y;
+        for _ in 0..200 {
+            tick_two_tons_crusher(&mut e);
+            lowest = lowest.max(e.y);
+        }
+        assert_eq!(e.y % 7, rest % 7, "the cycle must be closed");
+        assert_eq!(lowest - rest, 7, "it drops seven rows: 1 + 2 + 4");
+    }
+
+    #[test]
+    fn the_stone_head_waits_for_the_player_then_drops() {
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::StoneHeadCrusher);
+        e.x = 2;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        // Player nowhere near: it stays put.
+        let away = Player::spawn_at(40, 3);
+        for _ in 0..20 {
+            tick_stone_head_crusher(&mut e, &away, &level, &data);
+        }
+        assert_eq!(e.y, 0, "it should not drop with nobody underneath");
+
+        // Player underneath: it falls to the floor, then climbs home.
+        let mut under = Player::spawn_at(3, 3);
+        under.x = 3;
+        under.y = 3;
+        let mut lowest = e.y;
+        for _ in 0..10 {
+            tick_stone_head_crusher(&mut e, &under, &level, &data);
+            lowest = lowest.max(e.y);
+        }
+        assert!(lowest > 0, "it should have dropped");
+        assert!(lowest < 4, "and stopped on the floor, not through it");
+        for _ in 0..40 {
+            tick_stone_head_crusher(&mut e, &away, &level, &data);
+        }
+        assert_eq!(e.y, 0, "it should climb back to where it started");
+    }
+
+    #[test]
+    fn the_heart_plant_only_opens_for_a_player_overhead() {
+        let mut e = Enemy::default_for_test(EnemyKind::HeartPlant);
+        e.x = 10;
+        e.y = 10;
+        let mut beside = Player::spawn_at(4, 4);
+        beside.x = 4;
+        beside.y = 4;
+        for _ in 0..20 {
+            tick_heart_plant(&mut e, &beside);
+        }
+        assert_eq!(e.frame, 0, "it stays shut for a player off to the side");
+
+        let mut above = Player::spawn_at(10, 4);
+        above.x = 10;
+        above.y = 4;
+        let mut opened = false;
+        for _ in 0..240 {
+            tick_heart_plant(&mut e, &above);
+            opened |= e.frame > 0;
+            // The lurch is a column left on frame 1 and back on frame 2.
+            // Over many open/close cycles that must not accumulate - a
+            // plant that drifted would crawl across the level.
+            assert!(
+                (9..=10).contains(&e.x),
+                "the plant drifted to column {}",
+                e.x
+            );
+        }
+        assert!(opened, "it should open for a player directly above");
+    }
+
+    #[test]
+    fn the_sharp_robot_stays_under_its_ceiling() {
+        // A ceiling that runs out: the robot must turn at the gap rather
+        // than carry on into open air.
+        let (level, data) = world(&[
+            "#####...",
+            "........",
+            "........",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::SharpRobot);
+        e.x = 1;
+        e.y = 1;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d2 = DIR2_EAST;
+        for _ in 0..120 {
+            tick_sharp_robot(&mut e, &level, &data);
+            assert!(
+                (0..5).contains(&e.x),
+                "it ran out from under the ceiling to x={}",
+                e.x
+            );
+        }
+    }
+
+    #[test]
+    fn the_flying_wisp_loops_back_to_its_start() {
+        let mut e = Enemy::default_for_test(EnemyKind::FlyingWisp);
+        let start = e.y;
+        for _ in 0..64 {
+            tick_flying_wisp(&mut e);
+        }
+        assert_eq!(e.y, start, "a 64-tick loop must close");
+    }
+
+    /// An eye plant far from any wall, so only the player's column matters.
+    fn eye_plant(x: i32) -> Enemy {
+        let mut e = Enemy::default_for_test(EnemyKind::EyePlant);
+        e.x = x;
+        e
+    }
+
+    fn player_at(x: i32) -> Player {
+        let mut p = Player::spawn_at(x, 10);
+        p.x = x;
+        p
+    }
+
+    #[test]
+    fn the_eye_plant_looks_toward_the_player() {
+        // Frames are two banks of three: west / centre / east, then the
+        // same again for the blink. Mask off the blink to test the aim.
+        let aim = |plant_x: i32, player_x: i32| {
+            let mut e = eye_plant(plant_x);
+            tick_eye_plant(&mut e, &player_at(player_x));
+            e.frame % 3
+        };
+        assert_eq!(aim(20, 5), 0, "player far west -> look west");
+        assert_eq!(aim(20, 60), 2, "player far east -> look east");
+        assert_eq!(aim(20, 20), 1, "player level with it -> look ahead");
+    }
+
+    #[test]
+    fn the_eye_plants_dead_zone_is_lopsided() {
+        // Two tiles of slack to the west against one to the east
+        // (game1.c:3479-3485) - not symmetric, and worth pinning because
+        // it would be very easy to "tidy" into a symmetric test.
+        let aim = |player_x: i32| {
+            let mut e = eye_plant(20);
+            tick_eye_plant(&mut e, &player_at(player_x));
+            e.frame % 3
+        };
+        assert_eq!(aim(17), 0, "three west is outside the dead zone");
+        assert_eq!(aim(18), 1, "two west is still centre");
+        assert_eq!(aim(21), 1, "one east is still centre");
+        assert_eq!(aim(22), 2, "two east is outside it");
+    }
+
+    #[test]
+    fn the_eye_plant_never_moves_or_dies() {
+        let mut e = eye_plant(20);
+        let (x, y) = (e.x, e.y);
+        for _ in 0..200 {
+            tick_eye_plant(&mut e, &player_at(5));
+        }
+        assert_eq!((e.x, e.y), (x, y), "it is rooted to the spot");
+        assert!(!e.dead);
+    }
+
+    #[test]
+    fn the_eye_plant_blinks_sometimes_but_rarely() {
+        // 2-in-40 per tick. Over 4000 ticks that is ~200; the bounds are
+        // wide enough not to be flaky but tight enough to catch a blink
+        // that never fires or fires constantly.
+        let mut e = eye_plant(20);
+        let p = player_at(5);
+        let blinks = (0..4000)
+            .filter(|_| {
+                tick_eye_plant(&mut e, &p);
+                e.frame >= 3
+            })
+            .count();
+        assert!(
+            (40..800).contains(&blinks),
+            "blinked {blinks} times in 4000 ticks, expected roughly 200"
+        );
+    }
+
+    #[test]
+    fn a_throbbing_slime_cycles_and_stays_put() {
+        let mut e = Enemy::default_for_test(EnemyKind::Slime);
+        e.d5 = 0;
+        let scroll = crate::camera::Scroll::default();
+        let home = e.y;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..60 {
+            tick_slime(&mut e, &scroll);
+            seen.insert(e.frame);
+        }
+        assert_eq!(e.y, home, "a throb-only slime never falls");
+        assert_eq!(seen, [0, 1, 2, 3].into_iter().collect());
+    }
+
+    #[test]
+    fn a_dripping_slime_falls_and_returns_home() {
+        let mut e = Enemy::default_for_test(EnemyKind::Slime);
+        e.d5 = 1;
+        e.y = 8;
+        e.d2 = 8; // home row, as ConstructActor seeds it
+        let scroll = crate::camera::Scroll::default();
+        let mut fell_below = false;
+        for _ in 0..400 {
+            tick_slime(&mut e, &scroll);
+            if e.y > 8 {
+                fell_below = true;
+            }
+        }
+        assert!(fell_below, "it should detach and fall at some point");
+        assert!(
+            e.y >= 8,
+            "it must never end up above the ceiling it hangs from"
+        );
+    }
 
     #[test]
     fn an_actor_inside_the_window_is_visible() {

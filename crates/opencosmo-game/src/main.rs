@@ -24,6 +24,7 @@ mod sfx;
 mod tileset;
 mod trace;
 
+use bevy::audio::{AudioPlugin, GlobalVolume, Volume};
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use data::GameData;
@@ -74,6 +75,51 @@ fn present_mode() -> bevy::window::PresentMode {
     }
 }
 
+/// `COSMO_HEADLESS=1` runs the game without showing a window and without
+/// making a sound, so a verification run can happen while the machine is
+/// being used for something else.
+///
+/// It is deliberately *not* a separate code path: the window is still
+/// created and still renders, so screenshots, the present shader and every
+/// system behave exactly as they do normally - the window is simply never
+/// mapped, and the audio output's global volume is zero. A mode that
+/// skipped rendering would not be testing the thing that ships.
+fn headless() -> bool {
+    matches!(std::env::var("COSMO_HEADLESS").as_deref(), Ok("1") | Ok("on") | Ok("yes"))
+}
+
+/// The two things headless mode actually changes, as plain functions of the
+/// flag so they can be asserted without standing up an app, a window or an
+/// audio device - which is the whole point of the mode.
+fn primary_window(headless: bool) -> Window {
+    Window {
+        title: "OpenCosmo".into(),
+        resolution: window_size(),
+        present_mode: present_mode(),
+        visible: !headless,
+        ..default()
+    }
+}
+
+fn global_volume(headless: bool) -> GlobalVolume {
+    GlobalVolume::new(if headless {
+        Volume::SILENT
+    } else {
+        Volume::Linear(1.0)
+    })
+}
+
+/// `COSMO_SPEED=8` runs the clock faster, so a hundred-tick check does not
+/// take five and a half seconds of wall time. It scales virtual time, which
+/// is what `Time<Fixed>` accumulates from, so the simulation still sees the
+/// same 18.2Hz steps - there are just more of them per real second.
+fn time_scale() -> Option<f32> {
+    std::env::var("COSMO_SPEED")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|s| *s > 0.0 && (*s - 1.0).abs() > f32::EPSILON)
+}
+
 /// `COSMO_WINDOW=1280x800` sets the starting window size. Mostly for
 /// like-for-like performance comparisons: a window the compositor decides
 /// to maximise has several times the pixel count of one it leaves alone,
@@ -87,6 +133,14 @@ fn window_size() -> bevy::window::WindowResolution {
     bevy::window::WindowResolution::new(w, h)
 }
 
+/// Applies `COSMO_SPEED` once the app is up.
+fn apply_time_scale(mut virt: ResMut<Time<Virtual>>) {
+    if let Some(scale) = time_scale() {
+        virt.set_relative_speed(scale);
+        info!("clock running at {scale}x");
+    }
+}
+
 fn main() {
     let mut app = App::new();
     app.add_plugins(
@@ -97,17 +151,17 @@ fn main() {
                     ..default()
                 })
                 .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Cosmo's Cosmic Adventure (Reboot)".into(),
-                        resolution: window_size(),
-                        present_mode: present_mode(),
-                        ..default()
-                    }),
+                    primary_window: Some(primary_window(headless())),
+                    ..default()
+                })
+                .set(AudioPlugin {
+                    global_volume: global_volume(headless()),
                     ..default()
                 }),
         )
         .add_plugins(presentation::PresentationPlugin)
         .insert_resource(Time::<Fixed>::from_hz(18.2))
+        .add_systems(Startup, apply_time_scale)
         // COSMO_STATE lets a dev (or a headless screenshot run) jump
         // straight to a screen instead of clicking through the title.
         .insert_state(match std::env::var("COSMO_STATE").as_deref() {
@@ -133,6 +187,7 @@ fn main() {
         .init_resource::<hints::NearHintGlobe>()
         .init_resource::<hints::SawAutoHintGlobe>()
         .init_resource::<hints::HintLatch>()
+        .init_resource::<level::TileIndex>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -199,6 +254,11 @@ fn main() {
                 // Runs before hazard_damage so contact tests see this
                 // tick's positions rather than the previous one's.
                 enemy_ai::tick_enemies,
+                // Builds whatever the behaviors asked for - a turret's
+                // projectile, a hatching egg's ghost. After the ticks, so
+                // a thing spawned this tick first moves on the next one,
+                // as it does in the original.
+                enemy_ai::spawn_queued_actors,
             )
                 .chain()
                 .in_set(Tick::Movement),
@@ -370,6 +430,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
 ) {
     // Each episode names its levels differently, so the default start
@@ -386,6 +447,7 @@ fn setup_game(
         &asset_server,
         &data,
         &tileset_assets,
+        &mut tile_index,
         &start_level,
     )
     .expect("start level missing from generated assets");
@@ -463,5 +525,28 @@ fn teardown_game(
         .chain(game_camera.iter())
     {
         commands.entity(entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headless_mode_shows_no_window_and_makes_no_sound() {
+        assert!(!primary_window(true).visible, "headless must not map a window");
+        assert_eq!(
+            global_volume(true).volume,
+            Volume::SILENT,
+            "headless must be silent"
+        );
+    }
+
+    #[test]
+    fn a_normal_run_is_visible_and_audible() {
+        // The control: without this, a mode that silenced *everything*
+        // would pass the test above and still be wrong.
+        assert!(primary_window(false).visible);
+        assert_eq!(global_volume(false).volume, Volume::Linear(1.0));
     }
 }

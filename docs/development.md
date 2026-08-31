@@ -96,6 +96,33 @@ registers — and re-renders them with warm additive voices, tape wobble and a
 low-pass. The composition is untouched; only the instruments change. It is not
 good enough yet and the approach is being reconsidered.
 
+## Actor behaviours
+
+Each actor type's behaviour is a `tick_*` function in `enemy_ai.rs`, ported
+from the matching `ActXxx()` in `game1.c` and cited by line. They are
+deliberately **pure functions over `Enemy` plus the level** - no `Commands`,
+no queries, no Bevy types - which is what lets all of them be unit tested
+without standing up an app, a window or an audio device. `cargo test` is
+silent and takes under a tenth of a second.
+
+Two things a behaviour cannot do directly, and queues instead:
+
+- **Spawning another actor** (`NewActor` in the original) - push to
+  `Enemy::spawns` as `(ACT_* id, x, y)`. A turret's projectile, a hatching
+  egg's ghost.
+- **Writing to the map** (`SetMapTile`) - push to `Enemy::tile_writes` as
+  `(x, y, raw tile)`. A door making itself solid, a platform dropping out
+  from under the player.
+
+`spawn_queued_actors` drains both after the ticks, so anything created this
+tick first acts on the next one, as in the original.
+
+To add one: find the `ActXxx()` in `reference/cosmore/src/game1.c`, find the
+`ConstructActor` call that installs it (which gives you the `data1..data5`
+seeds), add an `EnemyKind` variant, a `tick_*` function, a row in
+`ENEMY_TABLE`, a dispatch arm, and a test. Note anything you deliberately
+left out with a `NOT PORTED:` line in the doc comment.
+
 ## Headless verification
 
 The game can be scripted and traced, which is how most behaviour here gets

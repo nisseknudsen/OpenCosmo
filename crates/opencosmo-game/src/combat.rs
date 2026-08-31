@@ -297,12 +297,12 @@ pub fn explosion_damage(
     effects: Res<EffectAssets>,
     mut score: ResMut<Score>,
     explosions: Query<&Explosion>,
-    enemies: Query<(Entity, &Enemy)>,
+    mut enemies: Query<(Entity, &mut Enemy)>,
 ) {
     let (blast_w, blast_h) = blast_size(&effects);
 
     for explosion in &explosions {
-        for (entity, enemy) in &enemies {
+        for (entity, mut enemy) in &mut enemies {
             // Blasts destroy more than pounces do - the roamer slug, for
             // instance, can only be killed this way (it appears in the
             // shard/destruction switch at game1.c:6955-7010 but never
@@ -320,6 +320,15 @@ pub fn explosion_damage(
                 enemy.width_tiles,
                 enemy.height_tiles,
             ) {
+                // A worm crate is broken open rather than destroyed: it
+                // has a map platform to clear and a worm to let out, which
+                // it queues for the spawn pass, so its entity has to live
+                // one more tick (game1.c:4696-4719).
+                if enemy.kind == EnemyKind::WormCrate {
+                    debug!("explosion burst a worm crate at ({}, {})", enemy.x, enemy.y);
+                    crate::enemy_ai::burst_worm_crate(&mut enemy);
+                    continue;
+                }
                 debug!("explosion killed enemy at ({}, {})", enemy.x, enemy.y);
                 commands.entity(entity).despawn();
                 effects::spawn_pounce_debris(&mut commands, &effects, enemy.x, enemy.y);
