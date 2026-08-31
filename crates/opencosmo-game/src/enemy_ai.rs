@@ -82,7 +82,9 @@ pub enum EnemyKind {
     /// actor in the game. It never moves and never hurts anyone; all it
     /// does is watch, which is done entirely through frame selection.
     EyePlant,
-    /// `ActPipeCorner` (game1.c:3052-3057) - exists only to be invisible.
+    /// `ActPipeCorner` (game1.c:3052-3057). The tick itself only hides the
+    /// actor; the corner's real job - turning a rider onto the next leg -
+    /// is `run_pipes`, because it acts on the player rather than itself.
     PipeCorner,
     /// `ActRedGreenSlime` (game1.c:2417-2461), both colours and both the
     /// throb-only and throb-and-drip variants.
@@ -188,6 +190,12 @@ const TILE_SWITCH_BLOCK: u16 = 0x3d88;
 const ACT_PARACHUTE_BALL: u16 = 22;
 /// `ACT_HAMBURGER` (actor.h) - what a destroyed satellite drops.
 const ACT_HAMBURGER: u16 = 82;
+/// `DIR8_*` as table indices, for the pipe corners' `d5`.
+const DIR8_NORTH_I: i32 = 1;
+const DIR8_EAST_I: i32 = 3;
+const DIR8_SOUTH_I: i32 = 5;
+const DIR8_WEST_I: i32 = 7;
+
 /// Decoration sprites the behaviours ask for (sprite.h:37, 119-120).
 const SPR_SPARKLE_SHORT: u16 = 15;
 const SPR_SMOKE: u16 = 97;
@@ -367,10 +375,11 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (95, EnemyKind::EyePlant, [0, 0, 0, 0, 0]),            // ACT_EYE_PLANT_FLOOR
     (96, EnemyKind::EyePlant, [0, 0, 0, 0, DRAW_MODE_FLIPPED]), // ACT_EYE_PLANT_CEIL
     // --- ActPipeCorner (game1.c:5804-5813) ---
-    (70, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_N
-    (71, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_S
-    (72, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_W
-    (73, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_E
+    // d5 carries which way the corner turns the rider (game1.c:7617-7636).
+    (70, EnemyKind::PipeCorner, [0, 0, 0, 0, DIR8_NORTH_I]), // ACT_PIPE_CORNER_N
+    (71, EnemyKind::PipeCorner, [0, 0, 0, 0, DIR8_SOUTH_I]), // ACT_PIPE_CORNER_S
+    (72, EnemyKind::PipeCorner, [0, 0, 0, 0, DIR8_WEST_I]),  // ACT_PIPE_CORNER_W
+    (73, EnemyKind::PipeCorner, [0, 0, 0, 0, DIR8_EAST_I]),  // ACT_PIPE_CORNER_E
     // --- ActRedGreenSlime (game1.c:5736-5739, 6271-6274) ---
     // The drip variants carry their home row in data2 and the drip flag in
     // data5; `Enemy::new` seeds data2 from y, as ConstructActor does.
@@ -3260,6 +3269,70 @@ pub fn run_transporters(
     state.time_left = 0;
 }
 
+/// The pipe network (game1.c:7613-7656).
+///
+/// A pipe end is an entrance while the player is outside and an exit while
+/// they are being carried. Jumping at one puts them in the pipe; each
+/// corner then shoves them along the next leg, hidden, for up to a hundred
+/// ticks; and the far end drops them out dizzy.
+///
+/// Cross-actor and player-state by nature, so a system rather than a
+/// behaviour tick.
+///
+/// NOT PORTED: `SND_PIPE_CORNER_HIT` and the "whoa" bubble on first use.
+pub fn run_pipes(mut player_q: Query<&mut Player>, pipes: Query<&Enemy>) {
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.dead_timer != 0 {
+        return;
+    }
+
+    for e in &pipes {
+        if e.dead {
+            continue;
+        }
+        match e.kind {
+            EnemyKind::PipeCorner => {
+                // Corners only act on someone already inside the network.
+                if !player.in_pipe
+                    || !crate::hints::touching_player(
+                        &player,
+                        e.x,
+                        e.y,
+                        e.width_tiles,
+                        e.height_tiles,
+                    )
+                {
+                    continue;
+                }
+                let (dx, dy) = crate::effects::DIR8[e.d5 as usize % 9];
+                // Not abortable and not blockable: once you are in the
+                // pipe you go where it goes (game1.c:7620).
+                player.set_push(dx, dy, 100, 2, false, false);
+            }
+            EnemyKind::PipeEnd => {
+                // The end's own row is three below its origin
+                // (game1.c:7640).
+                let at_mouth = e.x == player.x && (e.y + 3 == player.y || e.y + 2 == player.y);
+                if !at_mouth {
+                    continue;
+                }
+                if player.in_pipe && player.push.is_some() {
+                    // Spat out: the ride ends here.
+                    player.x = e.x;
+                    player.in_pipe = false;
+                    player.push = None;
+                    player.queue_dizzy();
+                } else if !player.in_pipe && !player.is_falling {
+                    player.in_pipe = true;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Ends the level once the boss's death sequence finishes, paying out the
 /// 100000 the original awards (game1.c:5634).
 pub fn finish_on_boss_defeat(
@@ -3297,9 +3370,8 @@ fn draws_hidden(e: &Enemy) -> bool {
         // The force field's own sprite is never drawn - only its beam is,
         // by `draw_force_field_beams` (game1.c:4356).
         EnemyKind::ForceField => true,
-        // The pipe corners exist purely to be invisible: the artwork is
-        // already in the map tiles, and the actor only marks the corner
-        // (game1.c:3052-3057).
+        // The corner is never drawn: the pipe artwork is already in the
+        // map tiles, and the actor only marks the turn (game1.c:3052).
         EnemyKind::PipeCorner => true,
         // Hidden for the whole cooldown between pulses (game1.c:5565).
         EnemyKind::FlamePulse => e.d1 != 0,
@@ -4267,6 +4339,50 @@ mod tests {
             assert!(e.y < 3, "it must not sink into the floor (y={})", e.y);
         }
         assert!(e.y >= 1, "and should have fallen toward it");
+    }
+
+    /// The pipe network is a system, not a tick, so these exercise the
+    /// player-state transitions it drives rather than calling it.
+    #[test]
+    fn a_pipe_ride_hides_the_player_and_keeps_them_safe() {
+        let mut p = Player::spawn_at(10, 10);
+        assert!(!p.is_invincible(), "ordinarily vulnerable");
+        p.in_pipe = true;
+        assert!(
+            p.is_invincible(),
+            "riding a pipe is as safe as the bubble (game1.c:6905)"
+        );
+    }
+
+    #[test]
+    fn leaving_a_pipe_leaves_the_player_dizzy() {
+        // The exit queues a head-shake, which then waits for the ground.
+        let mut p = Player::spawn_at(10, 10);
+        p.in_pipe = true;
+        p.set_push(1, 0, 100, 2, false, false);
+
+        // What run_pipes does at the far end.
+        p.in_pipe = false;
+        p.push = None;
+        p.queue_dizzy();
+
+        assert!(!p.is_invincible(), "and vulnerable again");
+        p.process_dizzy(true);
+        assert_ne!(p.dizzy_left, 0, "spat out disoriented");
+    }
+
+    #[test]
+    fn a_pipe_corners_direction_comes_from_its_actor_id() {
+        // Each corner turns the rider a different way; getting the DIR8
+        // index wrong would send them through a wall.
+        let dir_of = |act: u16| {
+            let (_, data) = behavior_for(act).expect("corner should be in the table");
+            crate::effects::DIR8[data[4] as usize % 9]
+        };
+        assert_eq!(dir_of(70), (0, -1), "ACT_PIPE_CORNER_N goes north");
+        assert_eq!(dir_of(71), (0, 1), "ACT_PIPE_CORNER_S goes south");
+        assert_eq!(dir_of(72), (-1, 0), "ACT_PIPE_CORNER_W goes west");
+        assert_eq!(dir_of(73), (1, 0), "ACT_PIPE_CORNER_E goes east");
     }
 
     #[test]
