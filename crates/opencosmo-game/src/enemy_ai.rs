@@ -78,6 +78,15 @@ pub enum EnemyKind {
     SmokeEmitter,
     /// `ActDragonfly` (game1.c:4655-4675).
     Dragonfly,
+    /// `ActEyePlant` (game1.c:3468-3488) - the most numerous unported
+    /// actor in the game. It never moves and never hurts anyone; all it
+    /// does is watch, which is done entirely through frame selection.
+    EyePlant,
+    /// `ActPipeCorner` (game1.c:3052-3057) - exists only to be invisible.
+    PipeCorner,
+    /// `ActRedGreenSlime` (game1.c:2417-2461), both colours and both the
+    /// throb-only and throb-and-drip variants.
+    Slime,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -199,6 +208,21 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     // sets it and is inert scenery, this one leaves it clear and falls.
     // It also spawns one row lower - see Enemy::new.
     (49, EnemyKind::Pyramid, [0, 0, 0, 0, 0]),             // ACT_PYRAMID_FALLING
+    // --- ActEyePlant (game1.c:5870-5875) ---
+    (95, EnemyKind::EyePlant, [0, 0, 0, 0, 0]),            // ACT_EYE_PLANT_FLOOR
+    (96, EnemyKind::EyePlant, [0, 0, 0, 0, DRAW_MODE_FLIPPED]), // ACT_EYE_PLANT_CEIL
+    // --- ActPipeCorner (game1.c:5804-5813) ---
+    (70, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_N
+    (71, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_S
+    (72, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_W
+    (73, EnemyKind::PipeCorner, [0, 0, 0, 0, 0]),          // ACT_PIPE_CORNER_E
+    // --- ActRedGreenSlime (game1.c:5736-5739, 6271-6274) ---
+    // The drip variants carry their home row in data2 and the drip flag in
+    // data5; `Enemy::new` seeds data2 from y, as ConstructActor does.
+    (42, EnemyKind::Slime, [0, 0, 0, 0, 0]),               // ACT_GRN_SLIME_THROB
+    (43, EnemyKind::Slime, [0, 0, 0, 0, 1]),               // ACT_GRN_SLIME_DRIP
+    (236, EnemyKind::Slime, [0, 0, 0, 0, 0]),              // ACT_RED_SLIME_THROB
+    (237, EnemyKind::Slime, [0, 0, 0, 0, 1]),              // ACT_RED_SLIME_DRIP
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -305,6 +329,12 @@ impl Enemy {
         if kind == EnemyKind::SpittingTurret {
             data[2] = x; // d3 = spawn column, the turret's rest position
         }
+        // The dripping slime returns to where it started rather than dying
+        // off the bottom of the map, so it carries its home row - which
+        // `ConstructActor` passes as data2 (game1.c:5739, 6274).
+        if kind == EnemyKind::Slime && data[4] != 0 {
+            data[1] = y;
+        }
         Enemy {
             kind,
             pounce_hits,
@@ -331,6 +361,38 @@ impl Enemy {
             // Seed from the spawn position so each actor desynchronises
             // from its neighbours but stays deterministic across runs.
             rng: (x as u32).wrapping_mul(1973).wrapping_add((y as u32).wrapping_mul(9277)) | 1,
+        }
+    }
+
+    /// A bare actor for unit tests: no sprite handles, no app, no window.
+    /// The tick functions are pure over `Enemy` + the level, which is what
+    /// makes the behaviors testable without standing up Bevy at all.
+    #[cfg(test)]
+    pub fn default_for_test(kind: EnemyKind) -> Self {
+        Enemy {
+            kind,
+            x: 10,
+            y: 10,
+            frame: 0,
+            d1: 0,
+            d2: 0,
+            d3: 0,
+            d4: 0,
+            d5: 0,
+            fall_time: 0,
+            dead: false,
+            width_tiles: 2,
+            height_tiles: 2,
+            west_free: false,
+            east_free: false,
+            acrophile: false,
+            force_active: true,
+            stay_active: false,
+            pounce_hits: 0,
+            pounce_recoil: 0,
+            weighted: false,
+            frames: Vec::new(),
+            rng: 0x1234_5678,
         }
     }
 
@@ -832,6 +894,75 @@ fn tick_dragonfly(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     }
 }
 
+/// `ActEyePlant` (game1.c:3468-3488). The plant never moves, never damages
+/// and never dies - the entire behavior is choosing which of six frames to
+/// draw, so that the eye follows the player across the room.
+///
+/// Frames come in two banks of three (looking west / centre / east); the
+/// second bank is the blink, picked on a 2-in-40 roll each tick. The
+/// original re-rolls *every* tick, so the blink is a single-tick flicker
+/// rather than a held pose - transcribed as-is.
+fn tick_eye_plant(e: &mut Enemy, player: &Player) {
+    // `random(40) > 37` - two of the forty outcomes, so about 5%.
+    e.d2 = if e.next_rand(40) > 37 { 3 } else { 0 };
+
+    // The dead zone is deliberately lopsided: two tiles of slack to the
+    // west against one to the east (game1.c:3479-3485).
+    e.frame = if e.x - 2 > player.x {
+        e.d2 as usize
+    } else if e.x + 1 < player.x {
+        (e.d2 + 2) as usize
+    } else {
+        (e.d2 + 1) as usize
+    };
+}
+
+/// `ActRedGreenSlime` (game1.c:2417-2461). Green and red are the same
+/// behavior with different artwork; `data5` picks between throbbing in
+/// place and throbbing then dripping down the screen.
+///
+/// NOT PORTED: the drip sound (`SND_DRIP`), which needs the sound number
+/// wired through - the motion is complete without it.
+fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
+    /// game1.c:2419 - note it holds seven entries but the throb-only path
+    /// only ever indexes the first six.
+    const THROB_FRAMES: [usize; 7] = [0, 1, 2, 3, 2, 1, 0];
+
+    if e.d5 == 0 {
+        // Throb in place forever.
+        e.frame = THROB_FRAMES[e.d3 as usize % THROB_FRAMES.len()];
+        e.d3 += 1;
+        if e.d3 == 6 {
+            e.d3 = 0;
+        }
+        return;
+    }
+
+    if e.d4 == 0 {
+        // Gathering: throb until a drop is ready to fall.
+        e.frame = THROB_FRAMES[(e.d3 as usize) % 6];
+        e.d3 += 1;
+        if e.d3 == 15 {
+            e.d4 = 1;
+            e.d3 = 0;
+            e.frame = 4;
+        }
+    } else if e.frame < 6 {
+        // Stretching away from the ceiling.
+        e.frame += 1;
+    } else {
+        // Falling. It is not killed at the bottom of the map like other
+        // actors - it returns to the ceiling row it started on and begins
+        // again, which is why `data2` holds the home row.
+        e.y += 1;
+        if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
+            e.y = e.d2;
+            e.d4 = 0;
+            e.frame = 0;
+        }
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -923,6 +1054,11 @@ pub fn tick_enemies(
             EnemyKind::RedJumper => tick_red_jumper(&mut e, player, &level, &data),
             EnemyKind::SmokeEmitter => tick_smoke_emitter(&mut e),
             EnemyKind::Dragonfly => tick_dragonfly(&mut e, &level, &data),
+            EnemyKind::EyePlant => tick_eye_plant(&mut e, player),
+            EnemyKind::Slime => tick_slime(&mut e, &scroll),
+            // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
+            // (game1.c:3052-3057).
+            EnemyKind::PipeCorner => {}
         }
 
         // Presentation. `frame` is clamped rather than trusted: a few
@@ -966,6 +1102,10 @@ fn draws_hidden(e: &Enemy) -> bool {
     match e.kind {
         // Never drawn at all - it only spawns smoke (game1.c:5602).
         EnemyKind::SmokeEmitter => true,
+        // The pipe corners exist purely to be invisible: the artwork is
+        // already in the map tiles, and the actor only marks the corner
+        // (game1.c:3052-3057).
+        EnemyKind::PipeCorner => true,
         // Hidden for the whole cooldown between pulses (game1.c:5565).
         EnemyKind::FlamePulse => e.d1 != 0,
         _ => false,
@@ -980,6 +1120,9 @@ fn flips_vertically(e: &Enemy) -> bool {
         // ActClamPlant (game1.c:3148) takes its draw mode straight from
         // data5, which the ceiling-mounted variant sets to FLIPPED.
         EnemyKind::ClamPlant => e.d5 == DRAW_MODE_FLIPPED,
+        // The ceiling-mounted eye plant is the floor one upside down
+        // (game1.c:5874).
+        EnemyKind::EyePlant => e.d5 == DRAW_MODE_FLIPPED,
         // ActPyramid (game1.c:2661-2662) flips the floor-mounted variant.
         EnemyKind::Pyramid => e.d5 != 0,
         // ActJumpPad (game1.c:2038) flips the ceiling-mounted variant.
@@ -1606,6 +1749,115 @@ fn tick_pyramid(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameDa
 mod tests {
     use super::*;
     use crate::camera::{SCROLL_H, SCROLL_W};
+
+    /// An eye plant far from any wall, so only the player's column matters.
+    fn eye_plant(x: i32) -> Enemy {
+        let mut e = Enemy::default_for_test(EnemyKind::EyePlant);
+        e.x = x;
+        e
+    }
+
+    fn player_at(x: i32) -> Player {
+        let mut p = Player::spawn_at(x, 10);
+        p.x = x;
+        p
+    }
+
+    #[test]
+    fn the_eye_plant_looks_toward_the_player() {
+        // Frames are two banks of three: west / centre / east, then the
+        // same again for the blink. Mask off the blink to test the aim.
+        let aim = |plant_x: i32, player_x: i32| {
+            let mut e = eye_plant(plant_x);
+            tick_eye_plant(&mut e, &player_at(player_x));
+            e.frame % 3
+        };
+        assert_eq!(aim(20, 5), 0, "player far west -> look west");
+        assert_eq!(aim(20, 60), 2, "player far east -> look east");
+        assert_eq!(aim(20, 20), 1, "player level with it -> look ahead");
+    }
+
+    #[test]
+    fn the_eye_plants_dead_zone_is_lopsided() {
+        // Two tiles of slack to the west against one to the east
+        // (game1.c:3479-3485) - not symmetric, and worth pinning because
+        // it would be very easy to "tidy" into a symmetric test.
+        let aim = |player_x: i32| {
+            let mut e = eye_plant(20);
+            tick_eye_plant(&mut e, &player_at(player_x));
+            e.frame % 3
+        };
+        assert_eq!(aim(17), 0, "three west is outside the dead zone");
+        assert_eq!(aim(18), 1, "two west is still centre");
+        assert_eq!(aim(21), 1, "one east is still centre");
+        assert_eq!(aim(22), 2, "two east is outside it");
+    }
+
+    #[test]
+    fn the_eye_plant_never_moves_or_dies() {
+        let mut e = eye_plant(20);
+        let (x, y) = (e.x, e.y);
+        for _ in 0..200 {
+            tick_eye_plant(&mut e, &player_at(5));
+        }
+        assert_eq!((e.x, e.y), (x, y), "it is rooted to the spot");
+        assert!(!e.dead);
+    }
+
+    #[test]
+    fn the_eye_plant_blinks_sometimes_but_rarely() {
+        // 2-in-40 per tick. Over 4000 ticks that is ~200; the bounds are
+        // wide enough not to be flaky but tight enough to catch a blink
+        // that never fires or fires constantly.
+        let mut e = eye_plant(20);
+        let p = player_at(5);
+        let blinks = (0..4000)
+            .filter(|_| {
+                tick_eye_plant(&mut e, &p);
+                e.frame >= 3
+            })
+            .count();
+        assert!(
+            (40..800).contains(&blinks),
+            "blinked {blinks} times in 4000 ticks, expected roughly 200"
+        );
+    }
+
+    #[test]
+    fn a_throbbing_slime_cycles_and_stays_put() {
+        let mut e = Enemy::default_for_test(EnemyKind::Slime);
+        e.d5 = 0;
+        let scroll = crate::camera::Scroll::default();
+        let home = e.y;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..60 {
+            tick_slime(&mut e, &scroll);
+            seen.insert(e.frame);
+        }
+        assert_eq!(e.y, home, "a throb-only slime never falls");
+        assert_eq!(seen, [0, 1, 2, 3].into_iter().collect());
+    }
+
+    #[test]
+    fn a_dripping_slime_falls_and_returns_home() {
+        let mut e = Enemy::default_for_test(EnemyKind::Slime);
+        e.d5 = 1;
+        e.y = 8;
+        e.d2 = 8; // home row, as ConstructActor seeds it
+        let scroll = crate::camera::Scroll::default();
+        let mut fell_below = false;
+        for _ in 0..400 {
+            tick_slime(&mut e, &scroll);
+            if e.y > 8 {
+                fell_below = true;
+            }
+        }
+        assert!(fell_below, "it should detach and fall at some point");
+        assert!(
+            e.y >= 8,
+            "it must never end up above the ceiling it hangs from"
+        );
+    }
 
     #[test]
     fn an_actor_inside_the_window_is_visible() {
