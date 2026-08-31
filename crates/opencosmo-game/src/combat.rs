@@ -90,6 +90,10 @@ pub fn pounce_enemies(
         ) {
             continue;
         }
+        // `isPounceReady` (game1.c:7077-7090): set by the alignment test
+        // itself, and read by `TryPounce` to tell a real landing from a
+        // glancing overlap.
+        player.pounce_ready = true;
         if !player.try_pounce(enemy.pounce_recoil) {
             continue;
         }
@@ -486,6 +490,9 @@ mod tests {
     #[test]
     fn pounce_requires_descending() {
         let mut player = Player::spawn_at(0, 0);
+        // The alignment pass arms this before TryPounce is consulted
+        // (game1.c:7077-7090).
+        player.pounce_ready = true;
         player.is_falling = false;
         player.jump_time = 0;
         assert!(!player.try_pounce(7), "grounded player cannot pounce");
@@ -499,9 +506,21 @@ mod tests {
     #[test]
     fn pounce_does_not_retrigger_mid_bounce() {
         let mut player = Player::spawn_at(0, 0);
+        player.pounce_ready = true;
         player.is_falling = true;
         assert!(player.try_pounce(7));
         // Still early in the bounce, so a second hit is refused.
         assert!(!player.try_pounce(7));
+    }
+
+    #[test]
+    fn an_unaligned_pounce_is_refused_however_fast_the_fall() {
+        // `isPounceReady` is what separates landing on something from
+        // merely overlapping it while falling past (game1.c:6855).
+        let mut player = Player::spawn_at(0, 0);
+        player.is_falling = true;
+        player.fall_time = 20;
+        assert!(!player.pounce_ready);
+        assert!(!player.try_pounce(7), "falling past is not a pounce");
     }
 }
