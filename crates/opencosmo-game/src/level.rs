@@ -528,6 +528,22 @@ mod light_tests {
     use super::*;
 
     #[test]
+    fn a_platforms_route_is_read_out_of_the_map() {
+        // The cell a platform sits on holds `DIR8 * 8` as its raw tile
+        // value. Those are all below TILE_STRIPED_PLATFORM (80), which is
+        // why the renderer treats them as air - so a route command is
+        // invisible, which is the point.
+        for (dir, (dx, dy)) in crate::effects::DIR8.iter().enumerate() {
+            let raw = (dir * 8) as u16;
+            assert!(
+                raw < 80,
+                "a route command must be invisible, but {raw} would draw"
+            );
+            assert_eq!(crate::effects::DIR8[(raw / 8) as usize], (*dx, *dy));
+        }
+    }
+
+    #[test]
     fn the_middle_of_a_cone_is_fully_lit() {
         for row in 0..8 {
             assert_eq!(LightSide::Middle.row_mask(row), [true; 8]);
@@ -572,5 +588,126 @@ mod light_tests {
         assert_eq!(light_cast_distance(1), 11);
         assert_eq!(light_cast_distance(2), 13);
         assert_eq!(light_cast_distance(3), 13);
+    }
+}
+
+/// A moving platform placed by `SPA_PLATFORM` (map_type 1).
+///
+/// The platform is five tiles wide and does not exist as artwork: it
+/// stamps `TILE_BLUE_PLATFORM` into the map under itself and stashes
+/// whatever it covered, restoring that as it moves on (game1.c:1660-1690).
+///
+/// Its route is in the map too. The cell it currently sits on holds a
+/// direction command - a raw tile value below `TILE_STRIPED_PLATFORM`,
+/// which is why the renderer treats those as air - and `value / 8` is the
+/// `DIR8` index it travels next.
+#[derive(Component)]
+pub struct Platform {
+    pub x: i32,
+    pub y: i32,
+    /// The five tiles currently underneath it, west to east.
+    pub stash: [u16; 5],
+}
+
+/// `TILE_BLUE_PLATFORM` (graphics.h:130); the five cells step by 8.
+const TILE_BLUE_PLATFORM: u16 = 0x3dd0;
+
+pub fn spawn_level_platforms(commands: &mut Commands, level: &LevelJson) {
+    for a in &level.actors {
+        if a.map_type != 1 {
+            continue;
+        }
+        commands.spawn((
+            Platform {
+                x: a.x as i32,
+                y: a.y as i32,
+                stash: [0; 5],
+            },
+            LevelScoped,
+        ));
+    }
+}
+
+/// `MovePlatforms` (game1.c:1660-1690), and the part of
+/// `MovePlayerPlatform` that carries a rider (game1.c:1500-1560).
+///
+/// NOT PORTED: the scroll nudges the original applies while riding, which
+/// depend on the look-up/down commands.
+pub fn move_platforms(
+    mut commands: Commands,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    data: Res<GameData>,
+    mut tile_index: ResMut<TileIndex>,
+    mut current: ResMut<crate::level::CurrentLevel>,
+    switches: Res<crate::enemy_ai::SwitchState>,
+    mut platforms: Query<&mut Platform>,
+    mut player_q: Query<&mut crate::player::Player>,
+) {
+    let Some(tileset) = tileset else {
+        return;
+    };
+    for mut plat in &mut platforms {
+        // Put back what it was covering before reading anything.
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                plat.y,
+                plat.stash[i],
+            );
+        }
+
+        // The route command lives in the cell the platform sits on.
+        let raw = if plat.x >= 0 && plat.y >= 0 {
+            current.level.tile_at(plat.x as usize, plat.y as usize)
+        } else {
+            0
+        };
+        let dir = (raw / 8) as usize % 9;
+        let (dx, dy) = crate::effects::DIR8[dir];
+
+        if switches.platforms_active {
+            if let Ok(mut player) = player_q.single_mut() {
+                // A rider is anyone whose feet are on the platform's row.
+                let on_it = player.dead_timer == 0
+                    && plat.y - 1 == player.y
+                    && player.x >= plat.x - 2
+                    && player.x <= plat.x + 2;
+                if on_it {
+                    player.x += dx;
+                    player.y += dy;
+                }
+            }
+            plat.x += dx;
+            plat.y += dy;
+        }
+
+        // Stash the new footprint, then stamp the platform over it.
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            plat.stash[i] = if x >= 0 && plat.y >= 0 {
+                current.level.tile_at(x as usize, plat.y as usize)
+            } else {
+                0
+            };
+        }
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                plat.y,
+                TILE_BLUE_PLATFORM + (i as u16 * 8),
+            );
+        }
     }
 }
