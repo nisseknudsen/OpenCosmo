@@ -124,7 +124,18 @@ pub enum EnemyKind {
     BabyGhostEgg,
     /// `ActJumpingBullet` (game1.c:2570-2592).
     JumpingBullet,
+    /// `ActWormCrate` (game1.c:4680-4726).
+    WormCrate,
+    /// `ActSplittingPlatform` (game1.c:3354-3410).
+    SplittingPlatform,
 }
+
+/// Map tiles these behaviors write (graphics.h:120-130).
+const TILE_EMPTY: u16 = 0x0000;
+const TILE_STRIPED_PLATFORM: u16 = 0x0050;
+const TILE_BLUE_PLATFORM: u16 = 0x3dd0;
+/// `ACT_PINK_WORM` (actor.h) - what a broken crate lets out.
+const ACT_PINK_WORM: u16 = 124;
 
 /// `ACT_PROJECTILE_W` / `_E` (actor.h:151-152), the two the shipped
 /// episodes actually fire.
@@ -305,6 +316,9 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (74, EnemyKind::BabyGhostEgg, [0, 0, 0, 0, 1]),        // ACT_BABY_GHOST_EGG_PROX
     (75, EnemyKind::BabyGhostEgg, [0, 0, 0, 0, 0]),        // ACT_BABY_GHOST_EGG
     (46, EnemyKind::JumpingBullet, [0, DIR2_WEST, 0, 0, 0]), // ACT_JUMPING_BULLET
+    // --- behaviors that write to the map (game1.c:5858, 5954) ---
+    (130, EnemyKind::WormCrate, [0, 0, 0, 0, 0]),          // ACT_WORM_CRATE
+    (91, EnemyKind::SplittingPlatform, [0, 0, 0, 0, 0]),   // ACT_SPLITTING_PLATFORM
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -378,6 +392,9 @@ pub struct Enemy {
     /// here, and `spawn_queued_actors` drains the queue afterwards with
     /// the `Commands` and assets it needs.
     pub spawns: Vec<(u16, i32, i32)>,
+    /// `SetMapTile` writes raised this tick, as (x, y, raw tile). Queued
+    /// for the same reason as `spawns`: the behaviors stay pure.
+    pub tile_writes: Vec<(i32, i32, u16)>,
 }
 
 impl Enemy {
@@ -455,6 +472,7 @@ impl Enemy {
             // from its neighbours but stays deterministic across runs.
             rng: (x as u32).wrapping_mul(1973).wrapping_add((y as u32).wrapping_mul(9277)) | 1,
             spawns: Vec::new(),
+            tile_writes: Vec::new(),
         }
     }
 
@@ -488,6 +506,7 @@ impl Enemy {
             frames: Vec::new(),
             rng: 0x1234_5678,
             spawns: Vec::new(),
+            tile_writes: Vec::new(),
         }
     }
 
@@ -1598,6 +1617,119 @@ fn tick_jumping_bullet(e: &mut Enemy) {
     }
 }
 
+/// `ActWormCrate` (game1.c:4680-4726). Lays a four-tile platform across
+/// its own top, falls until something stops it, and breaks open when a
+/// blast reaches it - letting out a pink worm.
+///
+/// NOT PORTED: the shards and the destruction sound. The explosion delay
+/// `data5` is seeded per-crate in the original from `GameRand`; here it
+/// comes from the actor's own PRNG on first tick, for the same effect.
+fn tick_worm_crate(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d4 == 0 {
+        // First tick: stamp the platform the player can stand on.
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 2, TILE_STRIPED_PLATFORM));
+        }
+        e.d4 = 1;
+        return;
+    }
+
+    let free_below = test_sprite_move(
+        Dir4::South,
+        e.x,
+        e.y + 1,
+        e.width_tiles,
+        e.height_tiles,
+        level,
+        data,
+    ) == MoveResult::Free;
+
+    if free_below {
+        // Falling: the platform travels with it.
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 2, TILE_EMPTY));
+        }
+        e.y += 1;
+        let landed = test_sprite_move(
+            Dir4::South,
+            e.x,
+            e.y + 1,
+            e.width_tiles,
+            e.height_tiles,
+            level,
+            data,
+        ) != MoveResult::Free;
+        if landed {
+            for i in 0..4 {
+                e.tile_writes.push((e.x + i, e.y - 2, TILE_STRIPED_PLATFORM));
+            }
+        }
+    }
+}
+
+/// Breaks a worm crate open. Called by the blast code rather than by the
+/// crate's own tick, which is where the original tests `IsNearExplosion`.
+pub fn burst_worm_crate(e: &mut Enemy) {
+    if e.dead {
+        return;
+    }
+    e.dead = true;
+    for i in 0..4 {
+        e.tile_writes.push((e.x + i, e.y - 2, TILE_EMPTY));
+    }
+    e.spawns.push((ACT_PINK_WORM, e.x, e.y));
+}
+
+/// `ActSplittingPlatform` (game1.c:3354-3410). Holds a four-tile platform
+/// until the player stands on it, then pulls apart and drops them, and
+/// finally closes again.
+///
+/// The original keeps its half-speed counter in the `westfree` field,
+/// which it borrows as an extra data word - noted because it looks like a
+/// collision flag and is not one.
+fn tick_splitting_platform(e: &mut Enemy, player: &Player) {
+    e.d3 += 1; // the original's borrowed `westfree`
+
+    if e.d1 == 0 {
+        e.d1 = 1;
+        for i in 0..4 {
+            e.tile_writes.push((e.x + i, e.y - 1, TILE_BLUE_PLATFORM));
+        }
+    } else if e.d1 == 1 && e.y - 2 == player.y {
+        // Either the player's left or right edge over the platform's span.
+        let over = (e.x <= player.x && e.x + 3 >= player.x)
+            || (e.x <= player.x + 2 && e.x + 3 >= player.x + 2);
+        if over {
+            e.d1 = 2;
+            e.d2 = 0;
+        }
+    } else if e.d1 == 2 {
+        if e.d3 % 2 != 0 {
+            e.d2 += 1;
+        }
+        if e.d2 == 5 {
+            // The halves have pulled apart far enough to drop through.
+            for i in 0..4 {
+                e.tile_writes.push((e.x + i, e.y - 1, TILE_EMPTY));
+            }
+        }
+        if e.d2 == 7 {
+            e.d1 = 3;
+            e.d2 = 0;
+        }
+    }
+
+    if e.d1 == 3 {
+        if e.d3 % 2 != 0 {
+            e.d2 += 1;
+        }
+        if e.d2 == 3 {
+            // Closed again; the next tick re-lays the platform.
+            e.d1 = 0;
+        }
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -1708,6 +1840,8 @@ pub fn tick_enemies(
             EnemyKind::SentryRobot => tick_sentry_robot(&mut e, player, &level, &data),
             EnemyKind::BabyGhostEgg => tick_baby_ghost_egg(&mut e, player),
             EnemyKind::JumpingBullet => tick_jumping_bullet(&mut e),
+            EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
+            EnemyKind::SplittingPlatform => tick_splitting_platform(&mut e, player),
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -1759,14 +1893,35 @@ pub fn spawn_queued_actors(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    mut tile_index: ResMut<crate::level::TileIndex>,
+    mut current: ResMut<CurrentLevel>,
     mut query: Query<&mut Enemy>,
 ) {
     // Collected first so the borrow on the query ends before spawning,
     // which would otherwise conflict with the new entities.
     let mut requests = Vec::new();
+    let mut writes = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
+        }
+        if !e.tile_writes.is_empty() {
+            writes.append(&mut e.tile_writes);
+        }
+    }
+    if let Some(tileset) = tileset {
+        for (x, y, raw) in writes {
+            crate::level::set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                y,
+                raw,
+            );
         }
     }
     for (act_type, x, y) in requests {
@@ -2594,6 +2749,97 @@ mod tests {
         }
         assert_eq!(outlet.frame, 0, "the outlet is inert");
         assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
+
+    #[test]
+    fn the_worm_crate_lays_a_platform_and_carries_it_down() {
+        let (level, data) = world(&[
+            "........",
+            "........",
+            "........",
+            "........",
+            "########",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::WormCrate);
+        e.x = 1;
+        e.y = 1;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        tick_worm_crate(&mut e, &level, &data);
+        assert_eq!(
+            e.tile_writes,
+            (0..4)
+                .map(|i| (1 + i, -1, TILE_STRIPED_PLATFORM))
+                .collect::<Vec<_>>(),
+            "first tick lays a four-tile platform across its top"
+        );
+        e.tile_writes.clear();
+
+        // Falling: it clears the old row and re-lays on landing.
+        for _ in 0..10 {
+            tick_worm_crate(&mut e, &level, &data);
+        }
+        assert_eq!(e.y, 3, "it should come to rest on the floor");
+        let last = e.tile_writes.last().expect("it should have written tiles");
+        assert_eq!(last.2, TILE_STRIPED_PLATFORM, "and re-lay on landing");
+    }
+
+    #[test]
+    fn bursting_a_crate_clears_its_platform_and_frees_a_worm() {
+        let mut e = Enemy::default_for_test(EnemyKind::WormCrate);
+        e.x = 5;
+        e.y = 9;
+        burst_worm_crate(&mut e);
+        assert!(e.dead);
+        assert_eq!(e.spawns, vec![(ACT_PINK_WORM, 5, 9)]);
+        assert!(
+            e.tile_writes.iter().all(|(_, _, raw)| *raw == TILE_EMPTY),
+            "the platform must be cleared, or it would hang in mid-air"
+        );
+        // Bursting twice must not release two worms.
+        let spawned = e.spawns.len();
+        burst_worm_crate(&mut e);
+        assert_eq!(e.spawns.len(), spawned);
+    }
+
+    #[test]
+    fn the_splitting_platform_only_opens_under_the_player() {
+        let mut e = Enemy::default_for_test(EnemyKind::SplittingPlatform);
+        e.x = 10;
+        e.y = 10;
+
+        let mut away = Player::spawn_at(40, 8);
+        away.x = 40;
+        away.y = 8;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &away);
+        }
+        assert_eq!(e.d1, 1, "it should stay closed with nobody on it");
+
+        // Standing on it: the player's row is two above the actor's.
+        let mut on = Player::spawn_at(11, 8);
+        on.x = 11;
+        on.y = 8;
+        let mut cleared = false;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &on);
+            cleared |= e
+                .tile_writes
+                .iter()
+                .any(|(_, _, raw)| *raw == TILE_EMPTY);
+        }
+        assert!(cleared, "it should drop the player through");
+        // ...and eventually re-lay itself.
+        let mut relaid = false;
+        for _ in 0..40 {
+            tick_splitting_platform(&mut e, &away);
+            relaid |= e
+                .tile_writes
+                .iter()
+                .any(|(_, _, raw)| *raw == TILE_BLUE_PLATFORM);
+        }
+        assert!(relaid, "the platform must come back");
     }
 
     #[test]

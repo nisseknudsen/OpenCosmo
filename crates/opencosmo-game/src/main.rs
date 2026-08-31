@@ -187,6 +187,7 @@ fn main() {
         .init_resource::<hints::NearHintGlobe>()
         .init_resource::<hints::SawAutoHintGlobe>()
         .init_resource::<hints::HintLatch>()
+        .init_resource::<level::TileIndex>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -429,6 +430,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
 ) {
     // Each episode names its levels differently, so the default start
@@ -445,6 +447,7 @@ fn setup_game(
         &asset_server,
         &data,
         &tileset_assets,
+        &mut tile_index,
         &start_level,
     )
     .expect("start level missing from generated assets");

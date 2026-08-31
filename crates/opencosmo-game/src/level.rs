@@ -74,7 +74,109 @@ pub fn tile_topleft_to_center(x: f32, y: f32, width_px: f32, height_px: f32) -> 
 /// player (10) and every actor (5..8).
 const FOREGROUND_Z: f32 = 12.0;
 
+/// Which entity is drawing each map cell, so a cell can be redrawn when
+/// the map changes under it. The original just writes a new value into the
+/// map array and the next frame's draw picks it up; here the map is a
+/// grid of entities spawned once, so a write has to find and rebuild one.
+///
+/// Cells holding air have no entity and so no row here.
+#[derive(Resource, Default)]
+pub struct TileIndex {
+    by_cell: bevy::platform::collections::HashMap<(usize, usize), Entity>,
+}
+
+impl TileIndex {
+    pub fn clear(&mut self) {
+        self.by_cell.clear();
+    }
+}
+
+/// Builds the entity for one map cell, if it needs one. Shared by the
+/// initial load and by later writes so a rebuilt cell is indistinguishable
+/// from one that was there all along.
+fn spawn_tile_cell(
+    commands: &mut Commands,
+    tileset: &TilesetAssets,
+    data: &GameData,
+    index: &mut TileIndex,
+    x: usize,
+    y: usize,
+    raw: u16,
+) {
+    // Values below TILE_STRIPED_PLATFORM (80) are "air" or a
+    // platform-direction command, not a real graphic - the original just
+    // shows backdrop through them (game1.c:889).
+    if raw < 80 {
+        return;
+    }
+    let pos = tile_topleft_to_center(x as f32, y as f32, TILE_PX, TILE_PX);
+    let z = if data.tile_attr(raw) & crate::data::TILE_ATTR_IN_FRONT != 0 {
+        FOREGROUND_Z
+    } else {
+        0.0
+    };
+    let (image, layout, idx) = if raw >= MASKED_TILE_THRESHOLD {
+        let idx = ((raw - MASKED_TILE_THRESHOLD) / 40) as usize;
+        (tileset.masked_image.clone(), tileset.masked_layout.clone(), idx)
+    } else {
+        let idx = (raw / 8) as usize;
+        (tileset.solid_image.clone(), tileset.solid_layout.clone(), idx)
+    };
+    let entity = commands
+        .spawn((
+            Sprite {
+                image,
+                texture_atlas: Some(TextureAtlas { layout, index: idx }),
+                ..default()
+            },
+            Transform::from_translation(pos.extend(z)),
+            TileMarker,
+            LevelScoped,
+        ))
+        .id();
+    index.by_cell.insert((x, y), entity);
+}
+
+/// Applies one `SetMapTile`-style write: updates the map the physics reads
+/// and rebuilds the cell being drawn, so the two never disagree.
+pub fn set_map_tile(
+    commands: &mut Commands,
+    tileset: &TilesetAssets,
+    data: &GameData,
+    index: &mut TileIndex,
+    level: &mut LevelJson,
+    x: i32,
+    y: i32,
+    raw: u16,
+) {
+    if x < 0 || y < 0 || x as usize >= level.width || y as usize >= level.height {
+        return;
+    }
+    let (x, y) = (x as usize, y as usize);
+    level.tiles[y * level.width + x] = raw;
+    if let Some(old) = index.by_cell.remove(&(x, y)) {
+        commands.entity(old).despawn();
+    }
+    spawn_tile_cell(commands, tileset, data, index, x, y, raw);
+}
+
 pub fn spawn_level_tiles(
+    commands: &mut Commands,
+    tileset: &TilesetAssets,
+    level: &LevelJson,
+    data: &GameData,
+    index: &mut TileIndex,
+) {
+    index.clear();
+    for y in 0..level.height {
+        for x in 0..level.width {
+            spawn_tile_cell(commands, tileset, data, index, x, y, level.tile_at(x, y));
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn spawn_level_tiles_old(
     commands: &mut Commands,
     tileset: &TilesetAssets,
     level: &LevelJson,

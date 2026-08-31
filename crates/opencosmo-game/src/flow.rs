@@ -174,6 +174,7 @@ pub fn restart_level(
     mut stars: ResMut<Stars>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
+    mut tile_index: ResMut<level::TileIndex>,
 ) {
     if events.read().next().is_none() {
         return;
@@ -186,7 +187,7 @@ pub fn restart_level(
     }
     let name = current.name.clone();
     if let Some(reloaded) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &name)
     {
         *current = reloaded;
     }
@@ -310,6 +311,7 @@ pub fn load_level_into_world(
     asset_server: &AssetServer,
     data: &GameData,
     tileset: &TilesetAssets,
+    tile_index: &mut level::TileIndex,
     stem: &str,
 ) -> Option<CurrentLevel> {
     let mut level = data.load_level(stem)?;
@@ -318,7 +320,7 @@ pub fn load_level_into_world(
     actors::apply_pedestal_platforms(&mut level);
     let bounds = level::content_bounds(&level);
     level::spawn_backdrop(commands, asset_server, &level, bounds);
-    level::spawn_level_tiles(commands, tileset, &level, data);
+    level::spawn_level_tiles(commands, tileset, &level, data, tile_index);
     actors::spawn_level_actors(commands, asset_server, &level, data);
 
     let (width, height, music) = (level.width, level.height, level.music.clone());
@@ -481,6 +483,7 @@ pub fn enter_level(
     mut player_q: Query<&mut Player>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
+    mut tile_index: ResMut<level::TileIndex>,
 ) {
     let Some(EnterLevel { level: next_name }) = events.read().last() else {
         return;
@@ -494,7 +497,7 @@ pub fn enter_level(
     }
 
     let Some(new_current) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, next_name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, next_name)
     else {
         return;
     };
