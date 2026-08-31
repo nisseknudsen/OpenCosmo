@@ -88,8 +88,11 @@ pub struct Explosion {
     pub age: u32,
 }
 
-/// A short-lived animated sprite that optionally drifts, covering the
-/// original's decorations and shards (pounce debris, sparkles, smoke).
+/// A short-lived animated sprite that drifts in a straight line - the
+/// original's `Decoration` (game1.c:1430-1476): smoke, sparkles, splashes.
+///
+/// It plays its frames `times_left` times and then vanishes; `None` means
+/// it runs until it leaves the view, which is what `numtimes == 0` does.
 #[derive(Component)]
 pub struct Decoration {
     x: i32,
@@ -97,9 +100,79 @@ pub struct Decoration {
     dx: i32,
     dy: i32,
     frame: usize,
+    times_left: Option<u32>,
     frames: Vec<Handle<Image>>,
     width_px: f32,
     height_px: f32,
+}
+
+/// `dir8X` / `dir8Y` (game1.c:82-83), indexed by `DIR8_*` (def.h:49-57).
+/// Note index 0 is *none*, not north - the compass starts at 1.
+pub const DIR8: [(i32, i32); 9] = [
+    (0, 0),   // DIR8_NONE
+    (0, -1),  // DIR8_NORTH
+    (1, -1),  // DIR8_NORTHEAST
+    (1, 0),   // DIR8_EAST
+    (1, 1),   // DIR8_SOUTHEAST
+    (0, 1),   // DIR8_SOUTH
+    (-1, 1),  // DIR8_SOUTHWEST
+    (-1, 0),  // DIR8_WEST
+    (-1, -1), // DIR8_NORTHWEST
+];
+
+pub const DIR8_NONE: usize = 0;
+pub const DIR8_NORTH: usize = 1;
+pub const DIR8_NORTHEAST: usize = 2;
+pub const DIR8_SOUTH: usize = 5;
+pub const DIR8_SOUTHWEST: usize = 6;
+pub const DIR8_WEST: usize = 7;
+pub const DIR8_NORTHWEST: usize = 8;
+
+/// `NewDecoration` (game1.c:1409-1428). The general form the behaviours
+/// ask for: a sprite, how many frames of it to cycle, where, which way it
+/// drifts, and how many times to repeat before it goes.
+pub fn spawn_decoration(
+    commands: &mut Commands,
+    effects: &EffectAssets,
+    spr: u16,
+    num_frames: usize,
+    x: i32,
+    y: i32,
+    dir8: usize,
+    num_times: u32,
+) {
+    let Some(sprite) = effects.get(spr) else {
+        return;
+    };
+    let frames: Vec<Handle<Image>> = sprite
+        .frames
+        .iter()
+        .take(num_frames.max(1))
+        .cloned()
+        .collect();
+    if frames.is_empty() {
+        return;
+    }
+    let (dx, dy) = DIR8[dir8.min(8)];
+    commands.spawn((
+        Sprite {
+            image: frames[0].clone(),
+            ..default()
+        },
+        Transform::from_translation(place(sprite, x, y)),
+        Decoration {
+            x,
+            y,
+            dx,
+            dy,
+            frame: 0,
+            times_left: (num_times != 0).then_some(num_times),
+            frames,
+            width_px: sprite.width_px,
+            height_px: sprite.height_px,
+        },
+        LevelScoped,
+    ));
 }
 
 #[derive(Component)]
@@ -154,6 +227,7 @@ pub fn spawn_pounce_debris(commands: &mut Commands, effects: &EffectAssets, x: i
                 dx,
                 dy,
                 frame: 0,
+                times_left: Some(1),
                 frames: sprite.frames.clone(),
                 width_px: sprite.width_px,
                 height_px: sprite.height_px,
@@ -254,8 +328,16 @@ pub fn tick_decorations(
     for (entity, mut dec, mut spr, mut transform) in &mut query {
         dec.frame += 1;
         if dec.frame >= dec.frames.len() {
-            commands.entity(entity).despawn();
-            continue;
+            // One pass of the frames done. A decoration with a repeat
+            // count loops until it runs out (game1.c:1465-1473).
+            dec.frame = 0;
+            match dec.times_left.as_mut() {
+                Some(1) | None => {
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+                Some(n) => *n -= 1,
+            }
         }
         dec.x += dec.dx;
         dec.y += dec.dy;
