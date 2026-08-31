@@ -188,6 +188,10 @@ const TILE_SWITCH_BLOCK: u16 = 0x3d88;
 const ACT_PARACHUTE_BALL: u16 = 22;
 /// `ACT_HAMBURGER` (actor.h) - what a destroyed satellite drops.
 const ACT_HAMBURGER: u16 = 82;
+/// Decoration sprites the behaviours ask for (sprite.h:37, 119-120).
+const SPR_SPARKLE_SHORT: u16 = 15;
+const SPR_SMOKE: u16 = 97;
+const SPR_SMOKE_LARGE: u16 = 98;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
 const ACT_DOOR_BLUE: u16 = 11;
@@ -601,6 +605,10 @@ pub struct Enemy {
     pub hold_player: u32,
     /// Set by the boss when its death sequence completes.
     pub won_level: bool,
+    /// `NewDecoration` requests raised this tick, as
+    /// (SPR_* id, frame count, x, y, DIR8, repeats). Queued for the same
+    /// reason as `spawns`: the behaviours stay pure.
+    pub decorations: Vec<(u16, usize, i32, i32, usize, u32)>,
 }
 
 impl Enemy {
@@ -684,6 +692,7 @@ impl Enemy {
             push_player: None,
             hold_player: 0,
             won_level: false,
+            decorations: Vec::new(),
         }
     }
 
@@ -722,6 +731,7 @@ impl Enemy {
             push_player: None,
             hold_player: 0,
             won_level: false,
+            decorations: Vec::new(),
         }
     }
 
@@ -1196,9 +1206,10 @@ fn tick_red_jumper(e: &mut Enemy, player: &Player, level: &LevelJson, data: &Gam
 /// `ActSmokeEmitter` (game1.c:5598-5611). An invisible marker that puffs
 /// smoke roughly one tick in thirty-two.
 ///
-/// NOT PORTED: the smoke itself (needs `NewDecoration`), which is all this
-/// actor does - so it is currently an invisible no-op. That is still the
-/// right rendering: the original never draws the emitter either, and
+/// The emitter is never drawn; the smoke is the whole actor. `data5`
+/// selects the small plume over the large one.
+///
+/// The original never draws the emitter either, and
 /// leaving it out of the table would show a stray sprite instead.
 /// `ActDragonfly` (game1.c:4655-4675). Flies straight along a row and
 /// turns at walls.
@@ -1323,8 +1334,7 @@ fn tick_arrow_piston(e: &mut Enemy) {
 /// it hits something or leaves the screen, and snaps back to its launcher
 /// to start again. `data2`/`data3` hold that launch position.
 ///
-/// NOT PORTED: the smoke puff on impact (`NewDecoration`) and the launch
-/// and impact sounds.
+/// NOT PORTED: the launch and impact sounds.
 fn tick_fireball(
     e: &mut Enemy,
     level: &LevelJson,
@@ -1339,6 +1349,11 @@ fn tick_fireball(
         let blocked = test_sprite_move(dir, e.x, e.y, e.width_tiles, e.height_tiles, level, data)
             != MoveResult::Free;
         if blocked {
+            // A puff where it struck, before it snaps back to its launcher
+            // (game1.c:2103, 2114).
+            let sx = if e.d5 == DIRP_WEST { e.x + 1 } else { e.x - 2 };
+            e.decorations
+                .push((SPR_SMOKE, 6, sx, e.y, crate::effects::DIR8_NORTH, 1));
             e.d1 = 0;
             e.x = e.d2;
             e.y = e.d3;
@@ -1575,7 +1590,7 @@ fn tick_two_tons_crusher(e: &mut Enemy) {
 /// underneath, drops two rows a tick until it lands, then climbs back to
 /// where it started at half speed.
 ///
-/// NOT PORTED: the impact sound and smoke puffs.
+/// NOT PORTED: the impact sound.
 fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     e.d4 = i32::from(e.d4 == 0);
 
@@ -1597,16 +1612,25 @@ fn tick_stone_head_crusher(e: &mut Enemy, player: &Player, level: &LevelJson, da
     } else if e.d1 == 1 {
         e.frame = 1;
         e.y += 1;
-        if blocked(e, level, data) {
+        let mut landed = blocked(e, level, data);
+        if landed {
             e.d1 = 2;
             e.y -= 1;
         } else {
             // It falls a second row in the same tick, testing again.
             e.y += 1;
-            if blocked(e, level, data) {
+            landed = blocked(e, level, data);
+            if landed {
                 e.d1 = 2;
                 e.y -= 1;
             }
+        }
+        if landed {
+            // Dust kicked out both ways on impact (game1.c:2620-2621).
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x + 1, e.y, crate::effects::DIR8_NORTHEAST, 1));
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x, e.y, crate::effects::DIR8_NORTHWEST, 1));
         }
     } else if e.d1 == 2 {
         e.frame = 0;
@@ -1996,17 +2020,32 @@ fn tick_door(e: &mut Enemy, switches: &SwitchState, level: &LevelJson) {
 /// the original shoves the player up with it, which needs player state the
 /// port does not have, so this flies without a passenger.
 ///
-/// NOT PORTED: the exhaust smoke, the sounds, the shards and the two
-/// explosions it leaves, and carrying the player.
+/// NOT PORTED: the sounds, the shards and the two explosions it leaves,
+/// and carrying the player.
 fn tick_rocket(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     if e.d1 != 0 {
         e.d1 -= 1;
+        // Exhaust on the pad, alternating sides (game1.c:5185-5191).
+        if e.d1 < 30 {
+            let (dx, dir) = if e.d1 % 2 != 0 {
+                (-1, crate::effects::DIR8_NORTHWEST)
+            } else {
+                (1, crate::effects::DIR8_NORTHEAST)
+            };
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x + dx, e.y + 1, dir, 1));
+        }
         return;
     }
 
     if e.d2 != 0 {
         if e.d2 > 1 {
             e.d2 -= 1;
+        }
+        // The burn under it as it climbs (game1.c:5218-5220).
+        if e.d2 > 4 && e.d2 % 2 != 0 {
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x, e.y + 2, crate::effects::DIR8_SOUTH, 1));
         }
         // Below ten it climbs a row a tick, and below five a second row in
         // the same tick - which is the acceleration off the pad.
@@ -2156,7 +2195,6 @@ pub fn press_foot_switch(e: &mut Enemy) {
 /// thrown, then climbs until it meets a ceiling and becomes part of the
 /// map.
 ///
-/// NOT PORTED: the sparkles it throws off as it rises.
 fn tick_mystery_wall(
     e: &mut Enemy,
     switches: &mut SwitchState,
@@ -2188,6 +2226,16 @@ fn tick_mystery_wall(
         }
         e.dead = true;
     } else {
+        if e.d1 % 2 == 0 {
+            e.decorations.push((
+                SPR_SPARKLE_SHORT,
+                4,
+                e.x - 1,
+                e.y - 1,
+                crate::effects::DIR8_NONE,
+                1,
+            ));
+        }
         e.d1 += 1;
         e.y -= 1;
     }
@@ -2337,12 +2385,22 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
 /// score in the game. Three, not two: the frame climbs 0 -> 1 -> 2 -> 3
 /// and only the step onto 3 topples it (game1.c:5381-5387).
 ///
-/// NOT PORTED: the shards, the smoke, and the two score effects it throws.
+/// NOT PORTED: the shards and the two score effects it throws.
 fn tick_monument(e: &mut Enemy) {
     if e.d2 != 0 {
         e.dead = true;
         for i in 0..9 {
             e.tile_writes.push((e.x + 1, e.y - i, TILE_EMPTY));
+        }
+        // The dust cloud it collapses into (game1.c:5352-5355).
+        for (dx, dy, dir) in [
+            (0, 0, crate::effects::DIR8_NORTH),
+            (0, 0, crate::effects::DIR8_NORTHEAST),
+            (0, 0, crate::effects::DIR8_NORTHWEST),
+            (0, -4, crate::effects::DIR8_NORTH),
+        ] {
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x + dx, e.y + dy, dir, 2));
         }
         return;
     }
@@ -2376,7 +2434,7 @@ pub fn blast_monument(e: &mut Enemy) -> bool {
 /// `ActSatellite` (game1.c:4728-4770). Two blasts destroy it and it drops
 /// a hamburger.
 ///
-/// NOT PORTED: the smoke ring, the shards and the destruction sound.
+/// NOT PORTED: the shards and the destruction sound.
 fn tick_satellite(e: &mut Enemy) {
     if e.d2 != 0 {
         e.d2 -= 1;
@@ -2394,6 +2452,11 @@ pub fn blast_satellite(e: &mut Enemy) {
         return;
     }
     e.dead = true;
+    // A ring of smoke in every compass direction (game1.c:4750-4752).
+    for dir in 1..9 {
+        e.decorations
+            .push((SPR_SMOKE, 6, e.x + 3, e.y - 3, dir, 3));
+    }
     e.spawns.push((ACT_HAMBURGER, e.x + 4, e.y));
 }
 
@@ -2752,6 +2815,17 @@ pub fn smash_frozen_dn(e: &mut Enemy) {
 
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
+    if e.d1 != 0 {
+        return;
+    }
+    // One in thirty-two ticks, a puff (game1.c:5602-5609).
+    if e.d5 != 0 {
+        e.decorations
+            .push((SPR_SMOKE, 6, e.x - 1, e.y, crate::effects::DIR8_NORTH, 1));
+    } else {
+        e.decorations
+            .push((SPR_SMOKE_LARGE, 6, e.x - 2, e.y, crate::effects::DIR8_NORTH, 1));
+    }
 }
 
 /// `IsSpriteVisible` (game1.c:916-931): does this actor's box overlap the
@@ -2951,6 +3025,7 @@ pub fn spawn_queued_actors(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
+    effects: Res<crate::effects::EffectAssets>,
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
@@ -2961,12 +3036,16 @@ pub fn spawn_queued_actors(
     // which would otherwise conflict with the new entities.
     let mut requests = Vec::new();
     let mut writes = Vec::new();
+    let mut decorations = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
         }
         if !e.tile_writes.is_empty() {
             writes.append(&mut e.tile_writes);
+        }
+        if !e.decorations.is_empty() {
+            decorations.append(&mut e.decorations);
         }
         if e.hold_player > 0 {
             if let Ok(mut player) = player_q.single_mut() {
@@ -2998,6 +3077,9 @@ pub fn spawn_queued_actors(
     }
     for (act_type, x, y) in requests {
         crate::actors::spawn_one_actor(&mut commands, &asset_server, &data, act_type, x, y);
+    }
+    for (spr, frames, x, y, dir, times) in decorations {
+        crate::effects::spawn_decoration(&mut commands, &effects, spr, frames, x, y, dir, times);
     }
 }
 
@@ -4185,6 +4267,45 @@ mod tests {
             assert!(e.y < 3, "it must not sink into the floor (y={})", e.y);
         }
         assert!(e.y >= 1, "and should have fallen toward it");
+    }
+
+    #[test]
+    fn the_smoke_emitter_puffs_occasionally_rather_than_constantly() {
+        // One tick in thirty-two. Over 3200 ticks that is ~100; wide
+        // bounds, but they catch an emitter that never fires or fires
+        // every tick - the two ways this actor can be wrong.
+        let mut e = Enemy::default_for_test(EnemyKind::SmokeEmitter);
+        let mut puffs = 0;
+        for _ in 0..3200 {
+            tick_smoke_emitter(&mut e);
+            puffs += e.decorations.len();
+            e.decorations.clear();
+        }
+        assert!(
+            (20..400).contains(&puffs),
+            "puffed {puffs} times in 3200 ticks, expected roughly 100"
+        );
+    }
+
+    #[test]
+    fn the_smoke_emitter_picks_its_plume_from_data5() {
+        let puff_for = |d5: i32| {
+            let mut e = Enemy::default_for_test(EnemyKind::SmokeEmitter);
+            e.d5 = d5;
+            for _ in 0..3200 {
+                tick_smoke_emitter(&mut e);
+                if let Some(d) = e.decorations.first() {
+                    return (d.0, d.2);
+                }
+            }
+            panic!("never puffed");
+        };
+        assert_eq!(puff_for(1).0, SPR_SMOKE, "the small plume");
+        assert_eq!(puff_for(0).0, SPR_SMOKE_LARGE, "the large one");
+        assert!(
+            puff_for(0).1 < puff_for(1).1,
+            "the large plume is offset further left to stay centred"
+        );
     }
 
     #[test]
