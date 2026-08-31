@@ -175,6 +175,7 @@ pub fn restart_level(
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
     mut tile_index: ResMut<level::TileIndex>,
+    mut switches: ResMut<crate::enemy_ai::SwitchState>,
 ) {
     if events.read().next().is_none() {
         return;
@@ -187,7 +188,7 @@ pub fn restart_level(
     }
     let name = current.name.clone();
     if let Some(reloaded) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &name)
     {
         *current = reloaded;
     }
@@ -312,9 +313,11 @@ pub fn load_level_into_world(
     data: &GameData,
     tileset: &TilesetAssets,
     tile_index: &mut level::TileIndex,
+    switches: &mut crate::enemy_ai::SwitchState,
     stem: &str,
 ) -> Option<CurrentLevel> {
     let mut level = data.load_level(stem)?;
+    switches.reset_for_level(&level);
     // Pedestal caps are solid floor; stamped in before anything reads the
     // map so collision and rendering agree.
     actors::apply_pedestal_platforms(&mut level);
@@ -484,6 +487,7 @@ pub fn enter_level(
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
     mut tile_index: ResMut<level::TileIndex>,
+    mut switches: ResMut<crate::enemy_ai::SwitchState>,
 ) {
     let Some(EnterLevel { level: next_name }) = events.read().last() else {
         return;
@@ -497,7 +501,7 @@ pub fn enter_level(
     }
 
     let Some(new_current) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, next_name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, next_name)
     else {
         return;
     };

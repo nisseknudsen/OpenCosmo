@@ -188,6 +188,7 @@ fn main() {
         .init_resource::<hints::SawAutoHintGlobe>()
         .init_resource::<hints::HintLatch>()
         .init_resource::<level::TileIndex>()
+        .init_resource::<enemy_ai::SwitchState>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -430,6 +431,7 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
+    mut switches: ResMut<enemy_ai::SwitchState>,
     mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
 ) {
@@ -448,6 +450,7 @@ fn setup_game(
         &data,
         &tileset_assets,
         &mut tile_index,
+        &mut switches,
         &start_level,
     )
     .expect("start level missing from generated assets");

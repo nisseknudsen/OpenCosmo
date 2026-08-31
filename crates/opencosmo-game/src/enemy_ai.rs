@@ -137,11 +137,32 @@ pub enum EnemyKind {
     JumpPadRobot,
     /// `ActIvyPlant` (game1.c:4774-4812).
     IvyPlant,
+    /// `ActHeadSwitch` (game1.c:2160-2170) - pounced to unlock its colour
+    /// of door.
+    HeadSwitch,
+    /// `ActFootSwitch` (game1.c:1893-1977), for the four sprites where it
+    /// is *not* a no-op: the knob that a bomb blast drives down.
+    FootSwitch,
+    /// `ActMysteryWall` (game1.c:3820-3854).
+    MysteryWall,
 }
+
+/// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
+const ACT_DOOR_BLUE: u16 = 11;
+const ACT_DOOR_YELLOW: u16 = 14;
+/// The four `ACT_SWITCH_*` ids a foot switch can carry in data5.
+const ACT_SWITCH_PLATFORMS: i32 = 59;
+const ACT_SWITCH_MYSTERY_WALL: i32 = 61;
+const ACT_SWITCH_LIGHTS: i32 = 120;
+const ACT_SWITCH_FORCE_FIELD: i32 = 121;
 
 /// `TILE_DOOR_BLOCK` (graphics.h:129) - what a locked door writes over
 /// itself to become solid.
 const TILE_DOOR_BLOCK: u16 = 0x3dc8;
+/// `TILE_MYSTERY_BLOCK_*` (graphics.h) - the four cells a rising mystery
+/// wall leaves behind. The port writes one value for all four; they differ
+/// only in which edges are drawn.
+const TILE_MYSTERY_BLOCK: u16 = 0x3d90;
 
 /// Map tiles these behaviors write (graphics.h:120-130).
 const TILE_EMPTY: u16 = 0x0000;
@@ -205,6 +226,11 @@ impl EnemyKind {
             // The stiffest creature in the game: a harder kick back and
             // seven pounces to kill (game1.c:7226-7241, data5 starts at 7).
             EnemyKind::RedJumper => (15, 7),
+            // A head switch is furniture that reacts: the pounce switch
+            // sets its frame and returns *false*, so the player lands on
+            // it rather than bouncing off, and it is never destroyed
+            // (game1.c:7454-7462).
+            EnemyKind::HeadSwitch => (0, i32::MAX),
             _ => return None,
         };
         Some(PounceSpec { recoil, hits })
@@ -342,6 +368,19 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (188, EnemyKind::Rocket, [60, 10, 0, 0, 0]),           // ACT_ROCKET
     (16, EnemyKind::JumpPadRobot, [0, DIR2_WEST, 0, 0, 0]), // ACT_JUMP_PAD_ROBOT
     (145, EnemyKind::IvyPlant, [5, 0, 0, 7, 0]),           // ACT_IVY_PLANT
+    // --- head switches (game1.c:5649-5667): data5 names the door they
+    // unlock, which sits four ids above the switch ---
+    (7, EnemyKind::HeadSwitch, [0, 0, 0, 0, 11]),          // ACT_HEAD_SWITCH_BLUE
+    (8, EnemyKind::HeadSwitch, [0, 0, 0, 0, 12]),          // ACT_HEAD_SWITCH_RED
+    (9, EnemyKind::HeadSwitch, [0, 0, 0, 0, 13]),          // ACT_HEAD_SWITCH_GREEN
+    (10, EnemyKind::HeadSwitch, [0, 0, 0, 0, 14]),         // ACT_HEAD_SWITCH_YELLOW
+    // --- foot switches (game1.c:5778-5927): the four sprites where
+    // ActFootSwitch is a real behavior rather than a no-op ---
+    (59, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_PLATFORMS]),
+    (61, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_MYSTERY_WALL]),
+    (120, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_LIGHTS]),
+    (121, EnemyKind::FootSwitch, [0, 0, 0, 0, ACT_SWITCH_FORCE_FIELD]),
+    (62, EnemyKind::MysteryWall, [0, 0, 0, 0, 0]),         // ACT_MYSTERY_WALL
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -367,10 +406,59 @@ pub fn behavior_for(act_id: u16) -> Option<(EnemyKind, [i32; 5])> {
         .map(|(_, kind, data)| (*kind, *data))
 }
 
+/// The level-wide flags the switches throw (game1.c:1935-1957). Every one
+/// starts *on* at level load (game1.c:10305, 10447, 10453); constructing
+/// the switch that governs it is what turns it off, so a level with a
+/// platform switch has its platforms dead until the switch is thrown
+/// (game1.c:5779, 5923).
+#[derive(Resource)]
+pub struct SwitchState {
+    pub platforms_active: bool,
+    pub lights_active: bool,
+    pub force_fields_active: bool,
+    /// Counts down while the mystery wall rises; non-zero wakes it.
+    pub mystery_wall_time: i32,
+    /// `ACT_DOOR_*` ids whose head switch has been pounced.
+    pub doors_opened: Vec<u16>,
+}
+
+impl SwitchState {
+    /// Resets for a newly loaded level. Every flag starts on, and then the
+    /// presence of a switch actor turns its flag off - which is what the
+    /// original does at construction time (game1.c:5779, 5786, 5923).
+    pub fn reset_for_level(&mut self, level: &LevelJson) {
+        *self = SwitchState::default();
+        for a in &level.actors {
+            match a.map_type as i32 - 31 {
+                ACT_SWITCH_PLATFORMS => self.platforms_active = false,
+                ACT_SWITCH_MYSTERY_WALL => self.mystery_wall_time = 0,
+                ACT_SWITCH_LIGHTS => self.lights_active = false,
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Default for SwitchState {
+    fn default() -> Self {
+        SwitchState {
+            platforms_active: true,
+            lights_active: true,
+            force_fields_active: true,
+            mystery_wall_time: 0,
+            doors_opened: Vec::new(),
+        }
+    }
+}
+
 /// A live actor running one of the ported behaviors.
 #[derive(Component)]
 pub struct Enemy {
     pub kind: EnemyKind,
+    /// The `ACT_*` id this was built from. Needed by behaviors that have
+    /// to recognise their own type at runtime - a door asking whether its
+    /// colour has been unlocked.
+    pub act_id: u16,
     pub x: i32,
     pub y: i32,
     pub frame: usize,
@@ -424,6 +512,7 @@ impl Enemy {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: EnemyKind,
+        act_id: u16,
         data: [i32; 5],
         x: i32,
         y: i32,
@@ -470,6 +559,7 @@ impl Enemy {
         }
         Enemy {
             kind,
+            act_id,
             pounce_hits,
             pounce_recoil,
             weighted,
@@ -506,6 +596,7 @@ impl Enemy {
     pub fn default_for_test(kind: EnemyKind) -> Self {
         Enemy {
             kind,
+            act_id: 0,
             x: 10,
             y: 10,
             frame: 0,
@@ -1761,14 +1852,37 @@ fn tick_splitting_platform(e: &mut Enemy, player: &Player) {
 /// NOT PORTED: `UpdateDoors` restoring the tiles it overwrote when the
 /// matching head switch is pounced. The original saves them in data1..5
 /// for exactly that; without the switch the door simply stays locked.
-fn tick_door(e: &mut Enemy) {
-    if e.d1 != 0 {
+fn tick_door(e: &mut Enemy, switches: &SwitchState, level: &LevelJson) {
+    if !e.west_free {
+        // The original borrows `westfree` as its "already stamped" flag
+        // (game1.c:2180) and saves the five tiles it is about to cover in
+        // data1..data5, so the switch can put them back.
+        e.west_free = true;
+        let saved = [&mut e.d1, &mut e.d2, &mut e.d3, &mut e.d4, &mut e.d5];
+        let (x, y0) = (e.x + 1, e.y);
+        for (row, slot) in saved.into_iter().enumerate() {
+            let y = y0 - row as i32;
+            *slot = if x >= 0 && y >= 0 {
+                level.tile_at(x as usize, y as usize) as i32
+            } else {
+                0
+            };
+        }
+        for row in 0..5 {
+            e.tile_writes.push((x, y0 - row, TILE_DOOR_BLOCK));
+        }
         return;
     }
-    e.d1 = 1;
-    for y in 0..5 {
-        e.tile_writes.push((e.x + 1, e.y - y, TILE_DOOR_BLOCK));
+
+    if !switches.doors_opened.contains(&e.act_id) {
+        return;
     }
+    // Unlocked: put back what the door covered and remove it.
+    let saved = [e.d1, e.d2, e.d3, e.d4, e.d5];
+    for (row, raw) in saved.into_iter().enumerate() {
+        e.tile_writes.push((e.x + 1, e.y - row as i32, raw as u16));
+    }
+    e.dead = true;
 }
 
 /// `ActRocket` (game1.c:5179-5262). Sits on a sixty-tick fuse, then climbs
@@ -1876,6 +1990,103 @@ fn tick_ivy_plant(e: &mut Enemy) {
     }
 }
 
+/// `ActHeadSwitch` (game1.c:2160-2170) and `UpdateDoors` (game1.c:2143).
+/// Pouncing the switch drives `frame` to 1; from there `data1` climbs to 3
+/// and the doors of its colour open on the way.
+fn tick_head_switch(e: &mut Enemy, switches: &mut SwitchState) {
+    if e.frame != 1 {
+        return;
+    }
+    if e.d1 < 3 {
+        e.d1 += 1;
+    }
+    // data5 names the door colour. `UpdateDoors` restores the door's saved
+    // tiles at step 1 and kills the door itself at step 2; recording the
+    // colour once lets each door do both from its own tick.
+    let door = e.d5 as u16;
+    if (ACT_DOOR_BLUE..=ACT_DOOR_YELLOW).contains(&door) && !switches.doors_opened.contains(&door) {
+        switches.doors_opened.push(door);
+    }
+}
+
+/// `ActFootSwitch` (game1.c:1893-1977) for the knob sprite, where it is a
+/// real behavior rather than the no-op it is for spikes and food.
+///
+/// A bomb blast drives the knob down one step; the fourth press throws
+/// whatever `data5` names. `press` is called by the blast code.
+///
+/// NOT PORTED: the switch tiles it stamps into the map as it descends, and
+/// the "whoa" speech bubble the mystery wall switch raises.
+fn tick_foot_switch(e: &mut Enemy, switches: &mut SwitchState) {
+    if e.d4 == 0 {
+        return;
+    }
+    e.d4 = 0;
+    e.y += 1;
+
+    if e.d1 != 4 {
+        return;
+    }
+    match e.d5 {
+        ACT_SWITCH_PLATFORMS => switches.platforms_active = true,
+        ACT_SWITCH_MYSTERY_WALL => switches.mystery_wall_time = 4,
+        ACT_SWITCH_LIGHTS => switches.lights_active = true,
+        ACT_SWITCH_FORCE_FIELD => switches.force_fields_active = false,
+        _ => {}
+    }
+}
+
+/// Drives a foot switch down one step. Called by the blast code, which is
+/// where the original tests `IsNearExplosion` (game1.c:1966-1977).
+pub fn press_foot_switch(e: &mut Enemy) {
+    if e.d1 >= 4 || e.d4 != 0 {
+        return;
+    }
+    e.d1 += 1;
+    e.d4 = 1;
+}
+
+/// `ActMysteryWall` (game1.c:3820-3854). Sleeps until its switch is
+/// thrown, then climbs until it meets a ceiling and becomes part of the
+/// map.
+///
+/// NOT PORTED: the sparkles it throws off as it rises.
+fn tick_mystery_wall(
+    e: &mut Enemy,
+    switches: &mut SwitchState,
+    level: &LevelJson,
+    data: &GameData,
+) {
+    if switches.mystery_wall_time != 0 {
+        e.d1 = 1;
+        e.force_active = true;
+    }
+    if e.d1 == 0 {
+        return;
+    }
+
+    if e.d1 % 2 != 0 {
+        for (dx, dy) in [(0, -1), (1, -1), (0, 0), (1, 0)] {
+            e.tile_writes.push((e.x + dx, e.y + dy, TILE_MYSTERY_BLOCK));
+        }
+    }
+
+    if test_sprite_move(
+        Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data,
+    ) != MoveResult::Free
+    {
+        if e.d1 % 2 == 0 {
+            for dx in 0..2 {
+                e.tile_writes.push((e.x + dx, e.y - 1, TILE_MYSTERY_BLOCK));
+            }
+        }
+        e.dead = true;
+    } else {
+        e.d1 += 1;
+        e.y -= 1;
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -1900,6 +2111,7 @@ pub fn tick_enemies(
     level_data: Res<CurrentLevel>,
     data: Res<GameData>,
     scroll: Res<crate::camera::Scroll>,
+    mut switches: ResMut<SwitchState>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -1988,10 +2200,15 @@ pub fn tick_enemies(
             EnemyKind::JumpingBullet => tick_jumping_bullet(&mut e),
             EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
             EnemyKind::SplittingPlatform => tick_splitting_platform(&mut e, player),
-            EnemyKind::Door => tick_door(&mut e),
+            EnemyKind::Door => tick_door(&mut e, &switches, &level),
             EnemyKind::Rocket => tick_rocket(&mut e, &level, &data),
             EnemyKind::JumpPadRobot => tick_jump_pad_robot(&mut e, &level, &data),
             EnemyKind::IvyPlant => tick_ivy_plant(&mut e),
+            EnemyKind::HeadSwitch => tick_head_switch(&mut e, &mut switches),
+            EnemyKind::FootSwitch => tick_foot_switch(&mut e, &mut switches),
+            EnemyKind::MysteryWall => {
+                tick_mystery_wall(&mut e, &mut switches, &level, &data)
+            }
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -2902,11 +3119,155 @@ mod tests {
     }
 
     #[test]
+    fn a_head_switch_unlocks_only_its_own_colour_of_door() {
+        let mut switches = SwitchState::default();
+        let mut sw = Enemy::default_for_test(EnemyKind::HeadSwitch);
+        sw.d5 = 13; // ACT_DOOR_GREEN
+
+        // Un-pounced, it does nothing.
+        for _ in 0..10 {
+            tick_head_switch(&mut sw, &mut switches);
+        }
+        assert!(switches.doors_opened.is_empty());
+
+        sw.frame = 1; // what the pounce sets
+        for _ in 0..10 {
+            tick_head_switch(&mut sw, &mut switches);
+        }
+        assert_eq!(switches.doors_opened, vec![13], "only green, and only once");
+    }
+
+    #[test]
+    fn a_door_reopens_to_exactly_the_tiles_it_covered() {
+        // The door remembers what it painted over; a blue door that
+        // reopened to the wrong tiles would leave a hole or a wall.
+        let (level, data) = world(&[
+            "..##....",
+            "..##....",
+            "..##....",
+            "..##....",
+            "..##....",
+            "########",
+        ]);
+        let _ = data;
+        let mut switches = SwitchState::default();
+        let mut e = Enemy::default_for_test(EnemyKind::Door);
+        e.act_id = 11; // ACT_DOOR_BLUE
+        e.x = 1;
+        e.y = 4;
+
+        tick_door(&mut e, &switches, &level);
+        let stamped: Vec<_> = e.tile_writes.drain(..).collect();
+        assert_eq!(stamped.len(), 5);
+        assert!(
+            stamped.iter().all(|(_, _, raw)| *raw == TILE_DOOR_BLOCK),
+            "it should have made itself solid"
+        );
+        let covered: Vec<u16> = (0..5)
+            .map(|r| level.tile_at(2, (4 - r) as usize))
+            .collect();
+
+        // Locked: nothing happens.
+        for _ in 0..20 {
+            tick_door(&mut e, &switches, &level);
+        }
+        assert!(e.tile_writes.is_empty() && !e.dead, "it stays shut");
+
+        switches.doors_opened.push(11);
+        tick_door(&mut e, &switches, &level);
+        let restored: Vec<u16> = e.tile_writes.iter().map(|(_, _, raw)| *raw).collect();
+        assert_eq!(restored, covered, "it must put back exactly what it covered");
+        assert!(e.dead, "and remove itself");
+    }
+
+    #[test]
+    fn a_foot_switch_throws_on_the_fourth_blast() {
+        let mut switches = SwitchState::default();
+        switches.force_fields_active = true;
+        let mut e = Enemy::default_for_test(EnemyKind::FootSwitch);
+        e.d5 = ACT_SWITCH_FORCE_FIELD;
+
+        for press in 1..4 {
+            press_foot_switch(&mut e);
+            tick_foot_switch(&mut e, &mut switches);
+            assert!(
+                switches.force_fields_active,
+                "press {press} should not have thrown it yet"
+            );
+        }
+        press_foot_switch(&mut e);
+        tick_foot_switch(&mut e, &mut switches);
+        assert!(!switches.force_fields_active, "the fourth press throws it");
+
+        // Further blasts do nothing.
+        for _ in 0..5 {
+            press_foot_switch(&mut e);
+            tick_foot_switch(&mut e, &mut switches);
+        }
+        assert_eq!(e.d1, 4, "the knob bottoms out at four");
+    }
+
+    #[test]
+    fn the_mystery_wall_sleeps_until_its_switch_is_thrown() {
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut switches = SwitchState::default();
+        let mut e = Enemy::default_for_test(EnemyKind::MysteryWall);
+        e.x = 1;
+        e.y = 3;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        for _ in 0..20 {
+            tick_mystery_wall(&mut e, &mut switches, &level, &data);
+        }
+        assert_eq!(e.y, 3, "it should not move before the switch");
+        assert!(e.tile_writes.is_empty());
+
+        switches.mystery_wall_time = 4;
+        for _ in 0..20 {
+            if e.dead {
+                break;
+            }
+            tick_mystery_wall(&mut e, &mut switches, &level, &data);
+        }
+        assert!(e.dead, "it should stop on reaching the ceiling");
+        assert!(e.y < 3, "having climbed from row 3 to {}", e.y);
+        assert!(
+            e.tile_writes.iter().all(|(_, _, raw)| *raw == TILE_MYSTERY_BLOCK),
+            "it leaves solid block behind it"
+        );
+    }
+
+    #[test]
+    fn a_level_with_a_switch_starts_with_that_system_off() {
+        let mut s = SwitchState::default();
+        let mut level = LevelJson::default();
+        assert!(s.platforms_active && s.lights_active, "on by default");
+
+        level.actors = vec![crate::data::LevelActorJson {
+            map_type: (ACT_SWITCH_PLATFORMS + 31) as u16,
+            x: 0,
+            y: 0,
+        }];
+        s.reset_for_level(&level);
+        assert!(!s.platforms_active, "the switch's presence disables them");
+        assert!(s.lights_active, "but not the unrelated ones");
+    }
+
+    #[test]
     fn a_door_makes_itself_solid_once_and_only_once() {
+        let (level, _) = world(&["........"; 12]);
+        let switches = SwitchState::default();
         let mut e = Enemy::default_for_test(EnemyKind::Door);
         e.x = 4;
         e.y = 9;
-        tick_door(&mut e);
+        tick_door(&mut e, &switches, &level);
         assert_eq!(
             e.tile_writes,
             (0..5).map(|y| (5, 9 - y, TILE_DOOR_BLOCK)).collect::<Vec<_>>(),
@@ -2914,7 +3275,7 @@ mod tests {
         );
         e.tile_writes.clear();
         for _ in 0..50 {
-            tick_door(&mut e);
+            tick_door(&mut e, &switches, &level);
         }
         assert!(
             e.tile_writes.is_empty(),

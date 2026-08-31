@@ -585,6 +585,7 @@ pub fn spawn_one_actor(
         entity.insert((
             crate::enemy_ai::Enemy::new(
                 kind,
+                act_type,
                 init,
                 ax,
                 ay,
