@@ -87,6 +87,20 @@ pub enum EnemyKind {
     /// `ActRedGreenSlime` (game1.c:2417-2461), both colours and both the
     /// throb-only and throb-and-drip variants.
     Slime,
+    /// `ActArrowPiston` (game1.c:2051-2083).
+    ArrowPiston,
+    /// `ActFireball` (game1.c:2089-2130).
+    Fireball,
+    /// `ActSpark` (game1.c:3418-3462) - crawls around the *outside* of a
+    /// solid, following its edge.
+    Spark,
+    /// `ActVerticalMover` (game1.c:2258-2280) - the vertical saw blade.
+    VerticalMover,
+    /// `ActHorizontalMover` (game1.c:1983-2021) - the floor-mounted sharp
+    /// robot, which pauses at each wall before turning.
+    HorizontalMover,
+    /// `ActPipeEnd` (game1.c:3860-3878) - only the inlet animates.
+    PipeEnd,
 }
 
 /// How an actor responds to being landed on: the recoil it kicks the
@@ -223,6 +237,25 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (43, EnemyKind::Slime, [0, 0, 0, 0, 1]),               // ACT_GRN_SLIME_DRIP
     (236, EnemyKind::Slime, [0, 0, 0, 0, 0]),              // ACT_RED_SLIME_THROB
     (237, EnemyKind::Slime, [0, 0, 0, 0, 1]),              // ACT_RED_SLIME_DRIP
+    // --- ActArrowPiston (game1.c:5637-5640) ---
+    (3, EnemyKind::ArrowPiston, [0, 0, 0, 0, DIR2_WEST]),  // ACT_ARROW_PISTON_W
+    (4, EnemyKind::ArrowPiston, [0, 0, 0, 0, DIR2_EAST]),  // ACT_ARROW_PISTON_E
+    // --- ActFireball (game1.c:5643-5646) ---
+    // d2/d3 are the launch position it snaps back to; `Enemy::new` seeds
+    // them from the spawn, as ConstructActor does.
+    (5, EnemyKind::Fireball, [0, 0, 0, 0, DIR2_WEST]),     // ACT_FIREBALL_W
+    (6, EnemyKind::Fireball, [0, 0, 0, 0, DIR2_EAST]),     // ACT_FIREBALL_E
+    // --- ActSpark (game1.c:5861) ---
+    (92, EnemyKind::Spark, [0, 0, 0, 0, 0]),               // ACT_SPARK
+    // --- ActVerticalMover / ActHorizontalMover (game1.c:5682, 5822) ---
+    (20, EnemyKind::VerticalMover, [0, 0, 0, 0, 0]),       // ACT_SAW_BLADE_VERT
+    (78, EnemyKind::HorizontalMover, [8, 0, 0, 0, 1]),     // ACT_SHARP_ROBOT_FLOOR
+    // --- ActPipeEnd (game1.c:5886-5889): only the inlet (d2=1) animates ---
+    (104, EnemyKind::PipeEnd, [0, 0, 0, 0, 0]),            // ACT_PIPE_OUTLET
+    (105, EnemyKind::PipeEnd, [0, 1, 0, 0, 0]),            // ACT_PIPE_INLET
+    // --- ActReciprocatingSpikes: the east-facing variant was simply
+    // missing from this table; it is the same behavior (game1.c:5848) ---
+    (88, EnemyKind::ReciprocatingSpikes, [1, 0, 0, 0, 0]), // ACT_SPIKES_E_RECIP
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -334,6 +367,12 @@ impl Enemy {
         // `ConstructActor` passes as data2 (game1.c:5739, 6274).
         if kind == EnemyKind::Slime && data[4] != 0 {
             data[1] = y;
+        }
+        // The fireball returns to its launcher after every pass, so it
+        // carries that position in data2/data3 (game1.c:5643-5646).
+        if kind == EnemyKind::Fireball {
+            data[1] = x;
+            data[2] = y;
         }
         Enemy {
             kind,
@@ -963,6 +1002,202 @@ fn tick_slime(e: &mut Enemy, scroll: &crate::camera::Scroll) {
     }
 }
 
+/// `ActArrowPiston` (game1.c:2051-2083). A 32-tick cycle that spends three
+/// ticks punching out and three pulling back, and the remaining twenty-six
+/// sitting still.
+///
+/// NOT PORTED: `SND_SPIKES_MOVE` on the two ticks it starts moving.
+fn tick_arrow_piston(e: &mut Enemy) {
+    if e.d1 < 31 {
+        e.d1 += 1;
+    } else {
+        e.d1 = 0;
+    }
+
+    // The two windows overlap in the source's `else if` chain: >28 wins
+    // over >25, so 29..31 retract and 26..28 extend.
+    let out = if e.d5 == DIR2_WEST { -1 } else { 1 };
+    if e.d1 > 28 {
+        e.x -= out;
+    } else if e.d1 > 25 {
+        e.x += out;
+    }
+}
+
+/// `ActFireball` (game1.c:2089-2130). Waits thirty ticks, then flies until
+/// it hits something or leaves the screen, and snaps back to its launcher
+/// to start again. `data2`/`data3` hold that launch position.
+///
+/// NOT PORTED: the smoke puff on impact (`NewDecoration`) and the launch
+/// and impact sounds.
+fn tick_fireball(
+    e: &mut Enemy,
+    level: &LevelJson,
+    data: &GameData,
+    scroll: &crate::camera::Scroll,
+) {
+    if e.d1 < 30 {
+        e.d1 += 1;
+    } else {
+        let dir = if e.d5 == DIR2_WEST { Dir4::West } else { Dir4::East };
+        e.x += if e.d5 == DIR2_WEST { -1 } else { 1 };
+        let blocked = test_sprite_move(dir, e.x, e.y, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free;
+        if blocked {
+            e.d1 = 0;
+            e.x = e.d2;
+            e.y = e.d3;
+        }
+    }
+
+    // Leaving the view also resets it - this actor is force-active, so
+    // without that it would keep flying forever off screen.
+    if !is_visible_at(e.x, e.y, e.width_tiles, e.height_tiles, scroll.x, scroll.y) {
+        e.d1 = 0;
+        e.x = e.d2;
+        e.y = e.d3;
+    }
+
+    e.frame = usize::from(e.frame == 0);
+}
+
+/// `ActSpark` (game1.c:3418-3462). Hugs the outside of a solid: it walks
+/// in its current direction, turns *into* a wall it meets, and turns
+/// *around* a corner it runs out of - which together trace the perimeter.
+/// Moves every other tick.
+fn tick_spark(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    const W: i32 = 0;
+    const E: i32 = 1;
+    const N: i32 = 2;
+    const S: i32 = 3;
+
+    e.d5 += 1;
+    e.frame = usize::from(e.frame == 0);
+    if e.d5 % 2 != 0 {
+        return;
+    }
+
+    let free = |x: i32, y: i32, dir: Dir4| {
+        test_sprite_move(dir, x, y, e.width_tiles, e.height_tiles, level, data) == MoveResult::Free
+    };
+
+    match e.d1 {
+        x if x == W => {
+            e.x -= 1;
+            if !free(e.x - 1, e.y, Dir4::West) {
+                e.d1 = N;
+            } else if free(e.x, e.y + 1, Dir4::South) {
+                e.d1 = S;
+            }
+        }
+        x if x == E => {
+            e.x += 1;
+            if !free(e.x + 1, e.y, Dir4::East) {
+                e.d1 = S;
+            } else if free(e.x, e.y - 1, Dir4::North) {
+                e.d1 = N;
+            }
+        }
+        x if x == N => {
+            e.y -= 1;
+            if !free(e.x, e.y - 1, Dir4::North) {
+                e.d1 = E;
+            } else if free(e.x - 1, e.y, Dir4::West) {
+                e.d1 = W;
+            }
+        }
+        _ => {
+            e.y += 1;
+            if !free(e.x, e.y + 1, Dir4::South) {
+                e.d1 = W;
+            } else if free(e.x + 1, e.y, Dir4::East) {
+                e.d1 = E;
+            }
+        }
+    }
+}
+
+/// `ActVerticalMover` (game1.c:2258-2280). Rises until the ceiling stops
+/// it, falls until the floor does.
+///
+/// NOT PORTED: `SND_SAW_BLADE_MOVE`, which the original plays every tick
+/// the blade is on screen.
+fn tick_vertical_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    e.frame = usize::from(e.frame == 0);
+
+    if e.d1 != DIR2_SOUTH {
+        if test_sprite_move(Dir4::North, e.x, e.y - 1, e.width_tiles, e.height_tiles, level, data)
+            != MoveResult::Free
+        {
+            e.d1 = DIR2_SOUTH;
+        } else {
+            e.y -= 1;
+        }
+    } else if test_sprite_move(Dir4::South, e.x, e.y + 1, e.width_tiles, e.height_tiles, level, data)
+        != MoveResult::Free
+    {
+        e.d1 = DIR2_NORTH;
+    } else {
+        e.y += 1;
+    }
+}
+
+/// `ActHorizontalMover` (game1.c:1983-2021). Paces left and right at half
+/// speed, pausing `data1` ticks at each end before turning back.
+fn tick_horizontal_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    // data3 gates movement to every other tick (the saw blade forces it to
+    // 1 and so moves every tick; no saw blade uses this behavior in the
+    // shipped episodes).
+    e.d3 = i32::from(e.d3 == 0);
+
+    if e.d4 != 0 {
+        e.d4 -= 1;
+    }
+    if e.d3 == 0 {
+        return;
+    }
+
+    if e.d4 == 0 {
+        if e.d2 != DIR2_WEST {
+            e.x += 1;
+            adjust_actor_move(e, Dir4::East, level, data);
+            if !e.east_free {
+                e.d2 = DIR2_WEST;
+                e.d4 = e.d1;
+            }
+        } else {
+            e.x -= 1;
+            adjust_actor_move(e, Dir4::West, level, data);
+            if !e.west_free {
+                e.d2 = DIR2_EAST;
+                e.d4 = e.d1;
+            }
+        }
+    }
+
+    e.frame += 1;
+    if e.frame as i32 > e.d5 {
+        e.frame = 0;
+    }
+}
+
+/// `ActPipeEnd` (game1.c:3860-3878). The outlet (`data2` zero) is inert;
+/// the inlet flickers between two frames.
+///
+/// NOT PORTED: the second sprite the original draws three rows below
+/// itself, which needs a decoration rather than a behavior.
+fn tick_pipe_end(e: &mut Enemy) {
+    if e.d2 == 0 {
+        return;
+    }
+    e.d1 += 1;
+    e.d3 += 1;
+    e.frame = if e.d3 % 2 != 0 { 4 } else { 0 };
+    if e.d1 == 4 {
+        e.d1 = 1;
+    }
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
 }
@@ -1055,6 +1290,12 @@ pub fn tick_enemies(
             EnemyKind::SmokeEmitter => tick_smoke_emitter(&mut e),
             EnemyKind::Dragonfly => tick_dragonfly(&mut e, &level, &data),
             EnemyKind::EyePlant => tick_eye_plant(&mut e, player),
+            EnemyKind::ArrowPiston => tick_arrow_piston(&mut e),
+            EnemyKind::Fireball => tick_fireball(&mut e, &level, &data, &scroll),
+            EnemyKind::Spark => tick_spark(&mut e, &level, &data),
+            EnemyKind::VerticalMover => tick_vertical_mover(&mut e, &level, &data),
+            EnemyKind::HorizontalMover => tick_horizontal_mover(&mut e, &level, &data),
+            EnemyKind::PipeEnd => tick_pipe_end(&mut e),
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
             // (game1.c:3052-3057).
@@ -1749,6 +1990,174 @@ fn tick_pyramid(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameDa
 mod tests {
     use super::*;
     use crate::camera::{SCROLL_H, SCROLL_W};
+
+    /// Builds a level out of ASCII art: `#` is solid, anything else empty.
+    /// Rows are equal length. This is the whole test rig - the behaviors
+    /// are pure over `Enemy` + `LevelJson` + `GameData`, so nothing here
+    /// touches Bevy, a window, or the audio device.
+    fn world(rows: &[&str]) -> (LevelJson, GameData) {
+        const SOLID: u16 = 8; // attr index 8/8 = 1
+        let width = rows[0].len();
+        let mut tiles = Vec::with_capacity(width * rows.len());
+        for row in rows {
+            assert_eq!(row.len(), width, "test world rows must be equal length");
+            tiles.extend(row.chars().map(|c| if c == '#' { SOLID } else { 0 }));
+        }
+        let level = LevelJson {
+            name: "test".into(),
+            width,
+            height: rows.len(),
+            tiles,
+            actors: Vec::new(),
+            backdrop: None,
+            music: None,
+            has_h_scroll_backdrop: false,
+            has_v_scroll_backdrop: false,
+        };
+        let mut tile_attrs = vec![0u8; 16];
+        tile_attrs[1] = TILE_ATTR_BLOCK_SOUTH
+            | TILE_ATTR_BLOCK_NORTH
+            | TILE_ATTR_BLOCK_WEST
+            | TILE_ATTR_BLOCK_EAST;
+        let data = GameData {
+            root: std::path::PathBuf::new(),
+            asset_prefix: String::new(),
+            episode: 1,
+            tileset: crate::data::TilesetJson {
+                tile_size: 8,
+                atlas_cols: 1,
+                solid_tile_count: 1,
+                masked_tile_count: 0,
+            },
+            tile_attrs,
+        };
+        (level, data)
+    }
+
+    #[test]
+    fn the_arrow_piston_returns_to_where_it_started() {
+        // A 32-tick cycle that punches out and pulls back must be a closed
+        // loop - a piston that drifted a tile per cycle would walk off.
+        for dir in [DIR2_WEST, DIR2_EAST] {
+            let mut e = Enemy::default_for_test(EnemyKind::ArrowPiston);
+            e.d5 = dir;
+            let start = e.x;
+            let mut extreme = e.x;
+            for _ in 0..32 {
+                tick_arrow_piston(&mut e);
+                if (e.x - start).abs() > (extreme - start).abs() {
+                    extreme = e.x;
+                }
+            }
+            assert_eq!(e.x, start, "dir {dir}: piston drifted over one cycle");
+            assert_eq!(
+                (extreme - start).abs(),
+                3,
+                "dir {dir}: it should reach three tiles out"
+            );
+        }
+        // ...and it extends the way it is aimed.
+        let mut w = Enemy::default_for_test(EnemyKind::ArrowPiston);
+        w.d5 = DIR2_WEST;
+        for _ in 0..28 {
+            tick_arrow_piston(&mut w);
+        }
+        assert!(w.x < 10, "the west-facing piston must punch west");
+    }
+
+    #[test]
+    fn the_fireball_waits_then_flies_and_resets_on_impact() {
+        // Open corridor with a wall to the west.
+        let (level, data) = world(&[
+            "..........",
+            "#....o....",
+            "##########",
+        ]);
+        let scroll = crate::camera::Scroll::default();
+        let mut e = Enemy::default_for_test(EnemyKind::Fireball);
+        e.x = 5;
+        e.y = 1;
+        e.d2 = 5;
+        e.d3 = 1;
+        e.d5 = DIR2_WEST;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+
+        for _ in 0..30 {
+            tick_fireball(&mut e, &level, &data, &scroll);
+        }
+        assert_eq!(e.x, 5, "it should still be waiting on its launcher");
+
+        let mut min_x = e.x;
+        for _ in 0..40 {
+            tick_fireball(&mut e, &level, &data, &scroll);
+            min_x = min_x.min(e.x);
+        }
+        assert!(min_x < 5, "it should have flown west");
+        assert_eq!((e.x, e.y), (5, 1), "and snapped back to its launcher");
+    }
+
+    #[test]
+    fn the_saw_blade_bounces_between_floor_and_ceiling() {
+        let (level, data) = world(&[
+            "####",
+            "....",
+            "....",
+            "....",
+            "####",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::VerticalMover);
+        e.x = 1;
+        e.y = 2;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        let mut rows = std::collections::BTreeSet::new();
+        for _ in 0..60 {
+            tick_vertical_mover(&mut e, &level, &data);
+            rows.insert(e.y);
+        }
+        assert_eq!(
+            rows,
+            [1, 2, 3].into_iter().collect(),
+            "it should sweep the open rows and never enter a wall"
+        );
+    }
+
+    #[test]
+    fn the_spark_crawls_around_a_block_instead_of_through_it() {
+        let (level, data) = world(&[
+            "........",
+            "..####..",
+            "..####..",
+            "........",
+        ]);
+        let mut e = Enemy::default_for_test(EnemyKind::Spark);
+        e.x = 2;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        for _ in 0..200 {
+            tick_spark(&mut e, &level, &data);
+            let inside = (2..6).contains(&e.x) && (1..3).contains(&e.y);
+            assert!(!inside, "the spark entered the solid at ({}, {})", e.x, e.y);
+        }
+    }
+
+    #[test]
+    fn only_the_pipe_inlet_animates() {
+        let mut outlet = Enemy::default_for_test(EnemyKind::PipeEnd);
+        outlet.d2 = 0;
+        let mut inlet = Enemy::default_for_test(EnemyKind::PipeEnd);
+        inlet.d2 = 1;
+        let mut inlet_frames = std::collections::BTreeSet::new();
+        for _ in 0..10 {
+            tick_pipe_end(&mut outlet);
+            tick_pipe_end(&mut inlet);
+            inlet_frames.insert(inlet.frame);
+        }
+        assert_eq!(outlet.frame, 0, "the outlet is inert");
+        assert_eq!(inlet_frames, [0, 4].into_iter().collect());
+    }
 
     /// An eye plant far from any wall, so only the player's column matters.
     fn eye_plant(x: i32) -> Enemy {
