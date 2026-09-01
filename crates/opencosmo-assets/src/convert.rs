@@ -62,6 +62,12 @@ pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
         // actor (map_type < 31) and so never seen by the ACT_* scan above
     131, // SPR_WORM_CRATE_SHARDS - debris, never placed
     144, // SPR_SATELLITE_SHARDS - debris, never placed
+    // The speech bubbles, raised by NewActor the first time the player
+    // meets certain things and never placed by a map.
+    235, // SPR_SPEECH_OUCH
+    244, // SPR_SPEECH_WHOA
+    245, // SPR_SPEECH_UMPH
+    246, // SPR_SPEECH_WOW_50K
 ];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
