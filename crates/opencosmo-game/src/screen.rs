@@ -198,6 +198,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     (" A)pogee's BBS", MenuAction::Bbs),
     (" H)igh Scores", MenuAction::HighScores),
     (" R)estore A Game", MenuAction::Restore),
+    (" D)emo", MenuAction::Demo),
     (" C)redits", MenuAction::Credits),
     (" T)itle Screen", MenuAction::Title),
     (" Q)uit Game", MenuAction::Quit),
@@ -213,6 +214,7 @@ enum MenuAction {
     Bbs,
     HighScores,
     Restore,
+    Demo,
     Controls,
     Credits,
     Title,
@@ -282,6 +284,7 @@ pub fn menu_input(
     mut exit: EventWriter<AppExit>,
     mut pages: ResMut<TextPages>,
     mut restore: EventWriter<crate::savegame::OpenSlotPrompt>,
+    mut demo: ResMut<crate::demo::Demo>,
 ) {
     let action = if keys.just_pressed(KeyCode::KeyB) || keys.just_pressed(KeyCode::Enter) {
         Some(MenuAction::Begin)
@@ -301,6 +304,8 @@ pub fn menu_input(
         Some(MenuAction::HighScores)
     } else if keys.just_pressed(KeyCode::KeyR) {
         Some(MenuAction::Restore)
+    } else if keys.just_pressed(KeyCode::KeyD) {
+        Some(MenuAction::Demo)
     } else if keys.just_pressed(KeyCode::KeyC) {
         Some(MenuAction::Credits)
     } else if keys.just_pressed(KeyCode::KeyT) {
@@ -334,6 +339,13 @@ pub fn menu_input(
         Some(MenuAction::HighScores) => next.set(GameState::HighScores),
         // Starts a game and opens the slot prompt over it, which is how
         // the original reaches a restore from the main menu.
+        // Nothing recorded yet means nothing to show, so the entry does
+        // nothing rather than starting an empty game.
+        Some(MenuAction::Demo) => {
+            if demo.start_playback() {
+                next.set(GameState::Playing);
+            }
+        }
         Some(MenuAction::Restore) => {
             restore.write(crate::savegame::OpenSlotPrompt(
                 crate::savegame::SlotPrompt::Restore,

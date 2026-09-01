@@ -5,6 +5,7 @@ mod cheats;
 mod combat;
 mod controls_screen;
 mod data;
+mod demo;
 mod devmenu;
 mod effects;
 mod enemy;
@@ -208,6 +209,7 @@ fn main() {
         .init_resource::<highscores::PendingEntry>()
         .init_resource::<savegame::SlotPrompt>()
         .init_resource::<cheats::CheatState>()
+        .init_resource::<demo::Demo>()
         .add_event::<savegame::OpenSlotPrompt>()
         .add_event::<savegame::RestoredGame>()
         .add_event::<hints::ShowHint>()
@@ -269,7 +271,7 @@ fn main() {
         // Before setup_game, so the level it loads is the chosen episode's.
         .add_systems(
             OnEnter(GameState::Playing),
-            (apply_chosen_episode, setup_game).chain(),
+            (apply_chosen_episode, setup_game, demo::autostart_demo).chain(),
         )
         .add_systems(
             OnExit(GameState::Playing),
@@ -295,6 +297,17 @@ fn main() {
                 .chain()
                 .after(player::read_input)
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
+        )
+        .add_systems(
+            FixedUpdate,
+            // After `read_input` and before the tick sets: a replayed
+            // frame has to *replace* what the keyboard produced, and
+            // ordering it only before the snapshot let `read_input`
+            // overwrite it every tick.
+            demo::drive_demo
+                .after(player::read_input)
+                .before(Tick::Snapshot)
+                .run_if(in_state(GameState::Playing)),
         )
         .add_systems(FixedUpdate, motion::snapshot_positions.in_set(Tick::Snapshot))
         .add_systems(
@@ -431,6 +444,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                demo::demo_hotkeys,
                 cheats::cheat_input,
                 cheats::close_cheat_message,
                 help::help_menu_input,
