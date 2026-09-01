@@ -47,6 +47,13 @@ impl LevelJson {
     }
 }
 
+/// An episode picked from the menu, waiting to be applied. Swapping the
+/// asset root under a running level would leave every handle pointing at
+/// the wrong episode, so the change is deferred to the moment a new game
+/// starts.
+#[derive(Resource, Default)]
+pub struct ChosenEpisode(pub Option<u8>);
+
 #[derive(Deserialize)]
 pub struct TilesetJson {
     pub tile_size: u32,

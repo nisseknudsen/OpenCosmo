@@ -168,6 +168,7 @@ fn main() {
             Ok("menu") => GameState::Menu,
             Ok("credits") => GameState::Credits,
             Ok("controls") => GameState::Controls,
+            Ok("episodes") => GameState::Episodes,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
@@ -194,6 +195,7 @@ fn main() {
         .init_resource::<effects::ShardXMode>()
         .init_resource::<enemy_ai::SeenBubbles>()
         .init_resource::<hints::SeenHints>()
+        .init_resource::<data::ChosenEpisode>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -226,7 +228,17 @@ fn main() {
             ),
         )
         // --- Gameplay ---
-        .add_systems(OnEnter(GameState::Playing), setup_game)
+        .add_systems(OnEnter(GameState::Episodes), screen::spawn_episodes)
+        .add_systems(OnExit(GameState::Episodes), screen::despawn_episodes)
+        .add_systems(
+            Update,
+            screen::episodes_input.run_if(in_state(GameState::Episodes)),
+        )
+        // Before setup_game, so the level it loads is the chosen episode's.
+        .add_systems(
+            OnEnter(GameState::Playing),
+            (apply_chosen_episode, setup_game).chain(),
+        )
         .add_systems(
             OnExit(GameState::Playing),
             (
@@ -447,6 +459,32 @@ fn insert_core_resources(app: &mut App) {
 }
 
 /// Everything that only exists while a level is being played.
+/// Applies an episode picked from the menu by rebuilding `GameData` and
+/// the assets keyed off it. Runs on the way into a game, which is the only
+/// point where nothing is holding a handle into the old episode.
+fn apply_chosen_episode(
+    mut chosen: ResMut<data::ChosenEpisode>,
+    mut data: ResMut<GameData>,
+) {
+    let Some(episode) = chosen.0.take() else {
+        return;
+    };
+    if episode == data.episode {
+        return;
+    }
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    // Only `GameData` is swapped here. Everything keyed off it - the level
+    // progression, the effect and sound assets, the tileset - is rebuilt
+    // by `setup_game`, which runs next in the same chain and reads this.
+    //
+    // Assigned rather than inserted through `Commands` for that reason: a
+    // deferred insert would hand `setup_game` the episode being left. And
+    // it must not touch the asset resources, which do not exist yet on the
+    // first entry into a game - `setup_game` is what creates them.
+    *data = GameData::load_episode(&assets_dir, episode);
+    info!("switched to episode {episode}");
+}
+
 fn setup_game(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
