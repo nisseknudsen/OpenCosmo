@@ -18,7 +18,8 @@ pub struct ExitTrigger {
     pub y: i32,
 }
 
-/// The exit sign, which ends the level once it scrolls into view.
+/// The exit sign, which ends the level when the player touches it
+/// (game1.c:7386 gates the switch at 7551 on contact).
 #[derive(Component)]
 pub struct ExitSign {
     pub x: i32,
