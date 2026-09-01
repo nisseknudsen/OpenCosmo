@@ -100,16 +100,21 @@ original's scroll camera; level progression including the bonus stages gated on
 your star count; pouncing and bombs; scoring and pickups; the status bar, title
 screen, menus and credits; hint globes; death replaying the level from scratch.
 
-Per-actor behaviour is ported for 63 of the original's `ActXxx()` functions —
-**every actor type placed in any of the three episodes**, including the
-switches and doors, the force fields, the transporters and the boss fight.
+Per-actor behaviour is ported for **every actor type placed in any of the three
+episodes** — the switches and doors, the force fields, the transporters, the
+pipe network, the boss fight, the moving platforms, the fountains and the
+lights. So are the player states (dizzy, the ice slide, the long jump), the
+decoration, shard and speech-bubble layers, and every sound effect the game
+has.
 
-**Missing:** the dizzy and ice-slide player states, and a few pieces of ported
-behaviours that need player state the port does not have yet — the rocket flies
-but cannot carry you, and the scooter cannot be ridden. Decorative touches are
-also left out throughout: smoke puffs, shards, sparkles and several sounds.
-Each omission is marked with a `NOT PORTED:` line in the behaviour's doc
-comment.
+Around the game: the story, instructions, ordering and BBS screens, the high
+score table, saving and restoring to nine slots in the original's own file
+format, demo recording and playback, the cheat code, the contextual hints, and
+an episode chooser.
+
+**Missing:** riding the rocket and the scooter, both of which need vehicle
+state that does not exist yet, and assorted decorative touches. Each is marked
+with a `NOT PORTED:` line in the relevant doc comment.
 
 There's no lives or game-over system because the original has none — dying
 costs you the level's progress, not a life.
