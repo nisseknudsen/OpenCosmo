@@ -111,6 +111,7 @@ pub fn hazard_damage(
     static_hazards: Query<&Transform, (With<Hazard>, Without<Walker>)>,
     walker_hazards: Query<(&Walker, &Transform), With<Hazard>>,
     mut sfx: EventWriter<PlaySfx>,
+    mut seen: ResMut<crate::hints::SeenHints>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -156,6 +157,9 @@ pub fn hazard_damage(
     }
 
     // `HurtPlayer` (game1.c:6900-6929). Taking a hit lets go of any wall.
+    // A first hit also queues the pounce reminder, unless the player has
+    // already pounced something and so evidently knows (game1.c:6915).
+    seen.on_first_hurt();
     player.cling_dir = None;
     player.health -= 1;
     if player.health <= 0 {

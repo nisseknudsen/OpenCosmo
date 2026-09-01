@@ -138,6 +138,53 @@ pub fn read_hint_globe(
 }
 
 /// Any key dismisses the message (the frame's own footer says so).
+/// Raised when a hint should be shown; the frame it opens shares
+/// `HintUi`, so the existing any-key dismissal already closes it.
+#[derive(Event)]
+pub struct ShowHint(pub Hint);
+
+/// Puts the hint frame up and pauses, the way a globe's message does.
+pub fn show_hint(
+    mut commands: Commands,
+    mut events: EventReader<ShowHint>,
+    mut paused: ResMut<Paused>,
+    hud: Res<crate::hud::HudAssets>,
+    ui_camera: Res<crate::screen::UiCamera>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+    open: Query<Entity, With<HintUi>>,
+) {
+    let Some(ShowHint(hint)) = events.read().last() else {
+        return;
+    };
+    // Never stack one on top of a globe's message.
+    if !open.is_empty() {
+        return;
+    }
+    let (title, bottom, lines) = hint.lines();
+    let height = lines.len() as i32 + 2;
+    let mut frame = crate::panel::TextFrame::new(2, height, 28, title, bottom);
+    for (i, line) in lines.iter().enumerate() {
+        frame = frame.text(3 + i as i32, line);
+    }
+    paused.0 = true;
+    sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::HINT_DIALOG_ALERT));
+    frame.spawn(&mut commands, &hud, ui_camera.0, HintUi);
+}
+
+/// Shows the pounce reminder once the tick that queued it is over.
+pub fn drain_queued_hint(
+    mut seen: ResMut<SeenHints>,
+    mut events: EventWriter<ShowHint>,
+    paused: Res<Paused>,
+) {
+    if paused.0 {
+        return;
+    }
+    if let Some(hint) = seen.take_queued_pounce() {
+        events.write(ShowHint(hint));
+    }
+}
+
 pub fn close_hint(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -253,6 +300,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn each_hint_fires_once_and_only_once() {
+        let mut s = SeenHints::default();
+        assert_eq!(s.on_bomb_refused(), Some(Hint::Bomb));
+        assert_eq!(s.on_bomb_refused(), None, "not a second time");
+        assert_eq!(s.on_power_up(), Some(Hint::Health));
+        assert_eq!(s.on_power_up(), None);
+    }
+
+    #[test]
+    fn the_pounce_reminder_is_queued_by_a_hit_not_shown_by_it() {
+        // Showing it inside HurtPlayer would put a frame up in the middle
+        // of taking damage; the original queues it and drains it later
+        // (game1.c:6915).
+        let mut s = SeenHints::default();
+        s.on_first_hurt();
+        assert_eq!(s.pounce, PounceHint::Queued);
+        assert_eq!(s.take_queued_pounce(), Some(Hint::Pounce));
+        assert_eq!(s.take_queued_pounce(), None, "drained");
+    }
+
+    #[test]
+    fn a_player_who_has_pounced_is_never_reminded() {
+        // game1.c:6867 - pouncing anything marks it seen, so a later hit
+        // does not explain the mechanic back to someone already using it.
+        let mut s = SeenHints::default();
+        s.on_pounce();
+        s.on_first_hurt();
+        assert_eq!(s.pounce, PounceHint::Seen);
+        assert_eq!(s.take_queued_pounce(), None);
+    }
+
+    #[test]
+    fn every_hint_has_something_to_say() {
+        for hint in [Hint::Bomb, Hint::Pounce, Hint::Health] {
+            let (_, _, lines) = hint.lines();
+            assert!(!lines.is_empty(), "{hint:?} would open an empty frame");
+            assert!(lines.iter().all(|l| l.len() <= 26), "{hint:?} overflows the frame");
+        }
+    }
+
+    #[test]
     fn every_hint_globe_actor_id_maps_to_a_hint() {
         // The three blocks are contiguous in hint number with no gaps and
         // no overlaps: 0, then 1..9, 10..15, 16..25.
@@ -336,5 +424,105 @@ mod tests {
         assert_ne!(ep2.height, 0);
         assert_eq!(hint_frame(1, 18).width, 30, "the long hint gets the wider frame");
         assert_eq!(hint_frame(1, 5).width, 28);
+    }
+}
+
+
+/// The three one-shot hints the game volunteers when the player first hits
+/// a situation the tutorial would have covered: `ShowBombHint`,
+/// `ShowPounceHint` and `ShowHealthHint` (game2.c).
+///
+/// Each fires once per episode. The pounce hint is the interesting one: it
+/// is *queued* by taking a first hit (game1.c:6915) and shown at the next
+/// safe moment rather than interrupting the hit itself, and taking a hit
+/// after successfully pouncing something never queues it - the player has
+/// evidently worked it out.
+#[derive(Resource, Default)]
+pub struct SeenHints {
+    pub bomb: bool,
+    pub health: bool,
+    pub pounce: PounceHint,
+}
+
+/// `POUNCE_HINT_*` (def.h:122-124).
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PounceHint {
+    #[default]
+    Unseen,
+    Queued,
+    Seen,
+}
+
+/// Which hint to raise, if any.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hint {
+    Bomb,
+    Pounce,
+    Health,
+}
+
+impl Hint {
+    /// The frame's lines, transcribed from game2.c. The original's spinner
+    /// and its trailing sprite glyphs are not reproduced.
+    pub fn lines(self) -> (&'static str, &'static str, Vec<&'static str>) {
+        match self {
+            Hint::Bomb => (
+                "",
+                "",
+                vec!["You haven't found any", "bombs to use yet!"],
+            ),
+            Hint::Pounce => (
+                "REMINDER:  Jump on",
+                "defend yourself.",
+                vec![" top of creatures to"],
+            ),
+            Hint::Health => (
+                "",
+                "",
+                vec![" Power Up modules", " increase Cosmo's", " health."],
+            ),
+        }
+    }
+}
+
+impl SeenHints {
+    /// Trying to place a bomb without any.
+    pub fn on_bomb_refused(&mut self) -> Option<Hint> {
+        if self.bomb {
+            return None;
+        }
+        self.bomb = true;
+        Some(Hint::Bomb)
+    }
+
+    /// Collecting the first power-up.
+    pub fn on_power_up(&mut self) -> Option<Hint> {
+        if self.health {
+            return None;
+        }
+        self.health = true;
+        Some(Hint::Health)
+    }
+
+    /// Taking a first hit queues the pounce reminder rather than showing
+    /// it there and then (game1.c:6915).
+    pub fn on_first_hurt(&mut self) {
+        if self.pounce == PounceHint::Unseen {
+            self.pounce = PounceHint::Queued;
+        }
+    }
+
+    /// Pouncing anything means the player already knows (game1.c:6867).
+    pub fn on_pounce(&mut self) {
+        self.pounce = PounceHint::Seen;
+    }
+
+    /// Drained at the top of a tick, where showing a frame is safe.
+    pub fn take_queued_pounce(&mut self) -> Option<Hint> {
+        if self.pounce != PounceHint::Queued {
+            return None;
+        }
+        self.pounce = PounceHint::Seen;
+        Some(Hint::Pounce)
     }
 }

@@ -61,6 +61,7 @@ pub fn pounce_enemies(
     mut commands: Commands,
     effects: Res<EffectAssets>,
     mut score: ResMut<Score>,
+    mut seen: ResMut<crate::hints::SeenHints>,
     mut player_q: Query<&mut Player>,
     mut enemies: Query<(Entity, &mut Enemy)>,
     mut sfx: EventWriter<PlaySfx>,
@@ -99,6 +100,7 @@ pub fn pounce_enemies(
         }
 
         sfx.write(PlaySfx(snd::PLAYER_POUNCE));
+        seen.on_pounce();
 
         // Tougher actors soak several pounces before dying, each one still
         // bouncing the player (game1.c:7160-7175, 7247-7260).
@@ -208,6 +210,8 @@ pub fn place_bomb(
     effects: Res<EffectAssets>,
     input: Res<PlayerInput>,
     mut sfx: EventWriter<PlaySfx>,
+    mut seen: ResMut<crate::hints::SeenHints>,
+    mut hints: EventWriter<crate::hints::ShowHint>,
     mut latch: Local<bool>,
     mut player_q: Query<&mut Player>,
 ) {
@@ -225,6 +229,10 @@ pub fn place_bomb(
     if player.bombs == 0 {
         *latch = true;
         sfx.write(PlaySfx(snd::NO_BOMBS));
+        // ...and the first time, explains why (game1.c:8513).
+        if let Some(hint) = seen.on_bomb_refused() {
+            hints.write(crate::hints::ShowHint(hint));
+        }
         return;
     }
     *latch = true;
