@@ -168,6 +168,7 @@ fn main() {
             Ok("menu") => GameState::Menu,
             Ok("credits") => GameState::Credits,
             Ok("controls") => GameState::Controls,
+            Ok("episodes") => GameState::Episodes,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
@@ -194,6 +195,7 @@ fn main() {
         .init_resource::<effects::ShardXMode>()
         .init_resource::<enemy_ai::SeenBubbles>()
         .init_resource::<hints::SeenHints>()
+        .init_resource::<data::ChosenEpisode>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -226,7 +228,17 @@ fn main() {
             ),
         )
         // --- Gameplay ---
-        .add_systems(OnEnter(GameState::Playing), setup_game)
+        .add_systems(OnEnter(GameState::Episodes), screen::spawn_episodes)
+        .add_systems(OnExit(GameState::Episodes), screen::despawn_episodes)
+        .add_systems(
+            Update,
+            screen::episodes_input.run_if(in_state(GameState::Episodes)),
+        )
+        // Before setup_game, so the level it loads is the chosen episode's.
+        .add_systems(
+            OnEnter(GameState::Playing),
+            (apply_chosen_episode, setup_game).chain(),
+        )
         .add_systems(
             OnExit(GameState::Playing),
             (
@@ -447,6 +459,42 @@ fn insert_core_resources(app: &mut App) {
 }
 
 /// Everything that only exists while a level is being played.
+/// Applies an episode picked from the menu by rebuilding `GameData` and
+/// the assets keyed off it. Runs on the way into a game, which is the only
+/// point where nothing is holding a handle into the old episode.
+fn apply_chosen_episode(
+    mut chosen: ResMut<data::ChosenEpisode>,
+    asset_server: Res<AssetServer>,
+    mut data: ResMut<GameData>,
+    mut effect_assets: ResMut<effects::EffectAssets>,
+    mut sfx_assets: ResMut<sfx::SfxAssets>,
+    mut sequence: ResMut<LevelSequence>,
+) {
+    let Some(episode) = chosen.0.take() else {
+        return;
+    };
+    if episode == data.episode {
+        return;
+    }
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let fresh = GameData::load_episode(&assets_dir, episode);
+    // Assigned rather than inserted through `Commands`: `setup_game` reads
+    // `GameData` in the same run, and a deferred insert would hand it the
+    // episode being left.
+    *effect_assets = effects::EffectAssets::load(&asset_server, &fresh);
+    *sfx_assets = sfx::SfxAssets::load(&asset_server, &fresh);
+    *data = fresh;
+    // Each episode names its levels differently, so the progression has to
+    // be rebuilt too or the warp list would still show the old one.
+    let start = data
+        .level_order()
+        .first()
+        .cloned()
+        .unwrap_or_else(|| START_LEVEL.to_string());
+    *sequence = LevelSequence::build(&data, &start);
+    info!("switched to episode {episode}");
+}
+
 fn setup_game(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

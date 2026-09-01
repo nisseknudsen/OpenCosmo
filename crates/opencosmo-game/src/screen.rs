@@ -26,6 +26,7 @@ pub enum GameState {
     Menu,
     Credits,
     Controls,
+    Episodes,
     Playing,
 }
 
@@ -186,6 +187,9 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     // The original calls this "G)ame Redefine" (game2.c:3629) and splits it
     // into keyboard and joystick screens; one screen covers both here.
     (" G)ame Redefine", MenuAction::Controls),
+    // No counterpart in the original, which ships as three separate
+    // executables. A remake carrying all three needs a way to choose.
+    (" E)pisode", MenuAction::Episodes),
     (" C)redits", MenuAction::Credits),
     (" T)itle Screen", MenuAction::Title),
     (" Q)uit Game", MenuAction::Quit),
@@ -194,6 +198,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
     Begin,
+    Episodes,
     Controls,
     Credits,
     Title,
@@ -266,6 +271,8 @@ pub fn menu_input(
         Some(MenuAction::Begin)
     } else if keys.just_pressed(KeyCode::KeyG) {
         Some(MenuAction::Controls)
+    } else if keys.just_pressed(KeyCode::KeyE) {
+        Some(MenuAction::Episodes)
     } else if keys.just_pressed(KeyCode::KeyC) {
         Some(MenuAction::Credits)
     } else if keys.just_pressed(KeyCode::KeyT) {
@@ -279,6 +286,7 @@ pub fn menu_input(
     match action {
         Some(MenuAction::Begin) => next.set(GameState::Playing),
         Some(MenuAction::Controls) => next.set(GameState::Controls),
+        Some(MenuAction::Episodes) => next.set(GameState::Episodes),
         Some(MenuAction::Credits) => next.set(GameState::Credits),
         Some(MenuAction::Title) => next.set(GameState::Title),
         Some(MenuAction::Quit) => {
@@ -290,6 +298,66 @@ pub fn menu_input(
 
 pub fn despawn_screen(mut commands: Commands, query: Query<Entity, With<ScreenUi>>) {
     for entity in &query {
+        commands.entity(entity).despawn();
+    }
+}
+
+
+/// Marks the episode chooser.
+#[derive(Component)]
+pub struct EpisodeUi;
+
+/// The three episodes, by the names the game gives them.
+const EPISODE_TITLES: [&str; 3] = [
+    " 1) Forbidden Planet",
+    " 2) Mad Scientist",
+    " 3) Secret Sanctum",
+];
+
+pub fn spawn_episodes(
+    mut commands: Commands,
+    hud: Res<crate::hud::HudAssets>,
+    ui_camera: Res<UiCamera>,
+    data: Res<crate::data::GameData>,
+) {
+    let mut frame =
+        crate::panel::TextFrame::new(4, 9, 26, "SELECT EPISODE", "ESC) Back");
+    for (i, title) in EPISODE_TITLES.iter().enumerate() {
+        let marker = if data.episode as usize == i + 1 { ">" } else { " " };
+        frame = frame.text(7 + i as i32, &format!("{marker}{title}"));
+    }
+    frame.spawn(&mut commands, &hud, ui_camera.0, EpisodeUi);
+}
+
+pub fn episodes_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut next: ResMut<NextState<GameState>>,
+    mut chosen: ResMut<crate::data::ChosenEpisode>,
+) {
+    let pick = if keys.just_pressed(KeyCode::Digit1) {
+        Some(1)
+    } else if keys.just_pressed(KeyCode::Digit2) {
+        Some(2)
+    } else if keys.just_pressed(KeyCode::Digit3) {
+        Some(3)
+    } else {
+        None
+    };
+    if let Some(n) = pick {
+        // Taken up by `apply_chosen_episode` on the way into a game, which
+        // is the only point where swapping the assets under everything is
+        // safe.
+        chosen.0 = Some(n);
+        next.set(GameState::Menu);
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyT) {
+        next.set(GameState::Menu);
+    }
+}
+
+pub fn despawn_episodes(mut commands: Commands, open: Query<Entity, With<EpisodeUi>>) {
+    for entity in &open {
         commands.entity(entity).despawn();
     }
 }
