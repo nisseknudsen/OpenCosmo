@@ -58,6 +58,8 @@ pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
     68, // SPR_PROJECTILE - fired by the turret and the wall plants
     82, // SPR_HAMBURGER - dropped by a destroyed satellite
     65, // SPR_BABY_GHOST - hatched from an egg; placed only in episodes 2-3
+    79, // SPR_FOUNTAIN - placed as SPA_FOUNTAIN_*, which is a special
+        // actor (map_type < 31) and so never seen by the ACT_* scan above
 ];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;

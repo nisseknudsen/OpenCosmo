@@ -328,6 +328,7 @@ pub fn load_level_into_world(
     level::spawn_level_tiles(commands, tileset, &level, data, tile_index);
     level::spawn_level_lights(commands, images, &level, data);
     level::spawn_level_platforms(commands, &level);
+    level::spawn_level_fountains(commands, &level);
     actors::spawn_level_actors(commands, asset_server, &level, data);
 
     let (width, height, music) = (level.width, level.height, level.music.clone());
