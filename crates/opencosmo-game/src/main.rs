@@ -20,6 +20,7 @@ mod panel;
 mod pickups;
 mod player;
 mod presentation;
+mod savegame;
 mod screen;
 mod sfx;
 mod textpages;
@@ -204,6 +205,9 @@ fn main() {
         .insert_resource(highscores::HighScores::load())
         .init_resource::<highscores::TableMode>()
         .init_resource::<highscores::PendingEntry>()
+        .init_resource::<savegame::SlotPrompt>()
+        .add_event::<savegame::OpenSlotPrompt>()
+        .add_event::<savegame::RestoredGame>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -426,6 +430,9 @@ fn main() {
             Update,
             (
                 help::help_menu_input,
+                savegame::open_slot_prompt,
+                savegame::slot_prompt_input,
+                savegame::apply_restored_game,
                 devmenu::open_level_warp,
                 devmenu::level_warp_input,
                 hints::show_hint,
