@@ -197,6 +197,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     (" O)rdering Info.", MenuAction::Ordering),
     (" A)pogee's BBS", MenuAction::Bbs),
     (" H)igh Scores", MenuAction::HighScores),
+    (" R)estore A Game", MenuAction::Restore),
     (" C)redits", MenuAction::Credits),
     (" T)itle Screen", MenuAction::Title),
     (" Q)uit Game", MenuAction::Quit),
@@ -211,6 +212,7 @@ enum MenuAction {
     Ordering,
     Bbs,
     HighScores,
+    Restore,
     Controls,
     Credits,
     Title,
@@ -279,6 +281,7 @@ pub fn menu_input(
     mut next: ResMut<NextState<GameState>>,
     mut exit: EventWriter<AppExit>,
     mut pages: ResMut<TextPages>,
+    mut restore: EventWriter<crate::savegame::OpenSlotPrompt>,
 ) {
     let action = if keys.just_pressed(KeyCode::KeyB) || keys.just_pressed(KeyCode::Enter) {
         Some(MenuAction::Begin)
@@ -296,6 +299,8 @@ pub fn menu_input(
         Some(MenuAction::Bbs)
     } else if keys.just_pressed(KeyCode::KeyH) {
         Some(MenuAction::HighScores)
+    } else if keys.just_pressed(KeyCode::KeyR) {
+        Some(MenuAction::Restore)
     } else if keys.just_pressed(KeyCode::KeyC) {
         Some(MenuAction::Credits)
     } else if keys.just_pressed(KeyCode::KeyT) {
@@ -327,6 +332,14 @@ pub fn menu_input(
             next.set(GameState::TextPages);
         }
         Some(MenuAction::HighScores) => next.set(GameState::HighScores),
+        // Starts a game and opens the slot prompt over it, which is how
+        // the original reaches a restore from the main menu.
+        Some(MenuAction::Restore) => {
+            restore.write(crate::savegame::OpenSlotPrompt(
+                crate::savegame::SlotPrompt::Restore,
+            ));
+            next.set(GameState::Playing);
+        }
         Some(MenuAction::Credits) => next.set(GameState::Credits),
         Some(MenuAction::Title) => next.set(GameState::Title),
         Some(MenuAction::Quit) => {
