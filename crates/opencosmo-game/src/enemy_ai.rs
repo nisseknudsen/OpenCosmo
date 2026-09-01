@@ -178,7 +178,16 @@ pub enum EnemyKind {
     Boss,
     /// `ActFrozenDN` (game1.c:5454-5520).
     FrozenDN,
+    /// `ActSpeechBubble` (game1.c:5290-5310) - the one-shot "WHOA!" and
+    /// friends the player says the first time they meet something.
+    SpeechBubble,
 }
+
+/// `ACT_SPEECH_*` (actor.h:271-282).
+pub const ACT_SPEECH_OUCH: u16 = 235;
+pub const ACT_SPEECH_WHOA: u16 = 244;
+pub const ACT_SPEECH_UMPH: u16 = 245;
+pub const ACT_SPEECH_WOW_50K: u16 = 246;
 
 /// Pounces needed to finish the boss (game1.c:5595). The harder variant
 /// the source can be built with wants 18; the shipped episodes use 12.
@@ -478,6 +487,11 @@ const ENEMY_TABLE: &[(u16, EnemyKind, [i32; 5])] = &[
     (108, EnemyKind::Transporter, [0, 0, 0, 0, 2]),        // ACT_TRANSPORTER_2
     (102, EnemyKind::Boss, [0, 0, 0, 0, 0]),               // ACT_BOSS
     (221, EnemyKind::FrozenDN, [0, 0, 0, 0, 0]),           // ACT_FROZEN_DN
+    // Speech bubbles. d5 marks the one that pays out (game1.c:5299).
+    (235, EnemyKind::SpeechBubble, [0, 0, 0, 0, 0]),       // ACT_SPEECH_OUCH
+    (244, EnemyKind::SpeechBubble, [0, 0, 0, 0, 0]),       // ACT_SPEECH_WHOA
+    (245, EnemyKind::SpeechBubble, [0, 0, 0, 0, 0]),       // ACT_SPEECH_UMPH
+    (246, EnemyKind::SpeechBubble, [0, 0, 0, 0, 1]),       // ACT_SPEECH_WOW_50K
     // --- ActDragonfly ---
     (129, EnemyKind::Dragonfly, [DIR2_WEST, 0, 0, 0, 0]),  // ACT_DRAGONFLY
 
@@ -546,6 +560,21 @@ impl Default for SwitchState {
             doors_opened: Vec::new(),
         }
     }
+}
+
+/// The `saw*Bubble` one-shots (game1.c:10465-10480). Each speech bubble
+/// fires the first time the player meets its thing and never again, and
+/// the flags reset per *episode*, not per level - so saying "whoa" at a
+/// transporter in level 1 keeps you quiet at every later one.
+#[derive(Resource, Default)]
+pub struct SeenBubbles {
+    pub pusher_robot: bool,
+    pub bear_trap: bool,
+    pub transporter: bool,
+    pub pipe: bool,
+    pub mystery_wall: bool,
+    pub boss: bool,
+    pub pounce_streak: bool,
 }
 
 /// `activeTransporter` / `transporterTimeLeft` (game1.c:4085-4122). A
@@ -630,6 +659,10 @@ pub struct Enemy {
     pub sounds: Vec<u16>,
     /// `NewShard` requests raised this tick, as (SPR_* id, frame, x, y).
     pub shards: Vec<(u16, usize, i32, i32)>,
+    /// Score this actor has earned and not yet handed over.
+    pub score_award: u32,
+    /// A speech bubble to raise, if its one-shot has not already fired.
+    pub bubble: Option<u16>,
 }
 
 impl Enemy {
@@ -716,6 +749,8 @@ impl Enemy {
             decorations: Vec::new(),
             sounds: Vec::new(),
             shards: Vec::new(),
+            score_award: 0,
+            bubble: None,
         }
     }
 
@@ -757,6 +792,8 @@ impl Enemy {
             decorations: Vec::new(),
             sounds: Vec::new(),
             shards: Vec::new(),
+            score_award: 0,
+            bubble: None,
         }
     }
 
@@ -2207,8 +2244,7 @@ fn tick_head_switch(e: &mut Enemy, switches: &mut SwitchState) {
 /// A bomb blast drives the knob down one step; the fourth press throws
 /// whatever `data5` names. `press` is called by the blast code.
 ///
-/// NOT PORTED: the switch tiles it stamps into the map as it descends, and
-/// the "whoa" speech bubble the mystery wall switch raises.
+/// NOT PORTED: the switch tiles it stamps into the map as it descends.
 fn tick_foot_switch(e: &mut Enemy, switches: &mut SwitchState) {
     if e.d4 == 0 {
         return;
@@ -2223,7 +2259,10 @@ fn tick_foot_switch(e: &mut Enemy, switches: &mut SwitchState) {
     e.sounds.push(crate::sfx::snd::FOOT_SWITCH_ON);
     match e.d5 {
         ACT_SWITCH_PLATFORMS => switches.platforms_active = true,
-        ACT_SWITCH_MYSTERY_WALL => switches.mystery_wall_time = 4,
+        ACT_SWITCH_MYSTERY_WALL => {
+            switches.mystery_wall_time = 4;
+            e.bubble = Some(ACT_SPEECH_WHOA);
+        }
         ACT_SWITCH_LIGHTS => switches.lights_active = true,
         ACT_SWITCH_FORCE_FIELD => switches.force_fields_active = false,
         _ => {}
@@ -2374,8 +2413,7 @@ fn has_beam(e: &Enemy) -> bool {
 /// them for five ticks at two cells a tick and waits three ticks before it
 /// can shove again.
 ///
-/// NOT PORTED: the "umph" speech bubble on the first shove, and the
-/// translucent draw mode it uses between shoves.
+/// NOT PORTED: the translucent draw mode it uses between shoves.
 fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     if e.d2 != 0 {
         // Holding the shove pose.
@@ -2403,6 +2441,7 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
         // not abortable - jumping does not get you out of it.
         e.push_player = Some((if west { -1 } else { 1 }, 0, 5, 2));
         e.sounds.push(crate::sfx::snd::PUSH_PLAYER);
+        e.bubble = Some(ACT_SPEECH_UMPH);
         return;
     }
 
@@ -2605,7 +2644,7 @@ fn tick_scooter(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `ActBearTrap` (game1.c:4933-4990). Snaps shut on the player standing in
 /// it and holds them for the length of its frame table.
 ///
-/// NOT PORTED: the "umph" bubble.
+
 fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
     /// game1.c:4937 - open, then twenty-three ticks shut, then easing back
     /// open over the last three.
@@ -2619,6 +2658,7 @@ fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
         if e.x == player.x && e.y == player.y {
             e.d2 = 1;
             e.sounds.push(crate::sfx::snd::BEAR_TRAP_CLOSE);
+            e.bubble = Some(ACT_SPEECH_UMPH);
             return FRAMES.len() as u32;
         }
         e.frame = 0;
@@ -2883,6 +2923,27 @@ pub fn smash_frozen_dn(e: &mut Enemy) {
     }
 }
 
+/// `ActSpeechBubble` (game1.c:5290-5310). Lives twenty ticks and follows
+/// the player rather than staying where it was raised, so it reads as
+/// something Cosmo is saying rather than an object in the world.
+fn tick_speech_bubble(e: &mut Enemy, player: &Player) {
+    if e.d1 == 0 {
+        e.sounds.push(crate::sfx::snd::SPEECH_BUBBLE);
+        // Only the "WOW! 50000 POINTS" bubble pays out, and it pays out
+        // for existing rather than for anything the player then does.
+        if e.d5 != 0 {
+            e.score_award += 50_000;
+        }
+    }
+    e.d1 += 1;
+    if e.d1 == 20 {
+        e.dead = true;
+        return;
+    }
+    e.x = player.x - 1;
+    e.y = player.y - 5;
+}
+
 fn tick_smoke_emitter(e: &mut Enemy) {
     e.d1 = e.next_rand(32) as i32;
     if e.d1 != 0 {
@@ -3039,6 +3100,7 @@ pub fn tick_enemies(
                 }
             }
             EnemyKind::FrozenDN => tick_frozen_dn(&mut e),
+            EnemyKind::SpeechBubble => tick_speech_bubble(&mut e, player),
             EnemyKind::TriggerLine => {
                 // The episode-end lines only mark the spot; the exit they
                 // stand for is driven by `ExitTrigger` in `actors.rs`.
@@ -3098,6 +3160,8 @@ pub fn spawn_queued_actors(
     effects: Res<crate::effects::EffectAssets>,
     mut sfx: EventWriter<crate::sfx::PlaySfx>,
     mut xmode: ResMut<crate::effects::ShardXMode>,
+    mut score: ResMut<crate::flow::Score>,
+    mut seen: ResMut<SeenBubbles>,
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
@@ -3111,6 +3175,7 @@ pub fn spawn_queued_actors(
     let mut decorations = Vec::new();
     let mut sounds: Vec<u16> = Vec::new();
     let mut shards: Vec<(u16, usize, i32, i32)> = Vec::new();
+    let mut bubbles: Vec<(u16, i32, i32)> = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
@@ -3126,6 +3191,31 @@ pub fn spawn_queued_actors(
         }
         if !e.shards.is_empty() {
             shards.append(&mut e.shards);
+        }
+        if e.score_award != 0 {
+            score.0 += e.score_award;
+            e.score_award = 0;
+        }
+        if let Some(act) = e.bubble.take() {
+            // The one-shot gate: which flag depends on what raised it.
+            let flag = match e.kind {
+                EnemyKind::PusherRobot => Some(&mut seen.pusher_robot),
+                EnemyKind::BearTrap => Some(&mut seen.bear_trap),
+                EnemyKind::FootSwitch => Some(&mut seen.mystery_wall),
+                EnemyKind::Boss => Some(&mut seen.boss),
+                _ => None,
+            };
+            let fire = match flag {
+                Some(f) if !*f => {
+                    *f = true;
+                    true
+                }
+                Some(_) => false,
+                None => true,
+            };
+            if fire {
+                bubbles.push((act, e.x, e.y));
+            }
         }
         if e.hold_player > 0 {
             if let Ok(mut player) = player_q.single_mut() {
@@ -3163,6 +3253,9 @@ pub fn spawn_queued_actors(
     }
     for number in sounds {
         sfx.write(crate::sfx::PlaySfx(number));
+    }
+    for (act, x, y) in bubbles {
+        crate::actors::spawn_one_actor(&mut commands, &asset_server, &data, act, x, y);
     }
     for (spr, frame, x, y) in shards {
         crate::effects::spawn_shard(&mut commands, &effects, &mut xmode, spr, frame, x, y);
@@ -4565,6 +4658,63 @@ mod tests {
                  invisible"
             );
         }
+    }
+
+    #[test]
+    fn a_speech_bubble_follows_the_player_and_expires() {
+        let mut e = Enemy::default_for_test(EnemyKind::SpeechBubble);
+        let mut p = Player::spawn_at(40, 30);
+        p.x = 40;
+        p.y = 30;
+
+        tick_speech_bubble(&mut e, &p);
+        assert_eq!(
+            e.sounds,
+            vec![crate::sfx::snd::SPEECH_BUBBLE],
+            "it speaks once, on its first tick"
+        );
+        assert_eq!((e.x, e.y), (39, 25), "and sits above the player's head");
+
+        // It tracks them rather than staying put.
+        p.x = 100;
+        p.y = 12;
+        tick_speech_bubble(&mut e, &p);
+        assert_eq!((e.x, e.y), (99, 7));
+
+        let mut ticks = 2;
+        while !e.dead {
+            tick_speech_bubble(&mut e, &p);
+            ticks += 1;
+            assert!(ticks < 100, "a bubble that never expired would follow forever");
+        }
+        assert_eq!(ticks, 20, "twenty ticks (game1.c:5305)");
+    }
+
+    #[test]
+    fn only_the_jackpot_bubble_pays_out() {
+        let p = Player::spawn_at(10, 10);
+        let mut plain = Enemy::default_for_test(EnemyKind::SpeechBubble);
+        tick_speech_bubble(&mut plain, &p);
+        assert_eq!(plain.score_award, 0, "'whoa' is not worth anything");
+
+        let mut jackpot = Enemy::default_for_test(EnemyKind::SpeechBubble);
+        jackpot.d5 = 1;
+        tick_speech_bubble(&mut jackpot, &p);
+        assert_eq!(jackpot.score_award, 50_000);
+
+        // ...and only once, however long it lives.
+        for _ in 0..18 {
+            tick_speech_bubble(&mut jackpot, &p);
+        }
+        assert_eq!(jackpot.score_award, 50_000);
+    }
+
+    #[test]
+    fn the_bubble_actor_ids_are_right() {
+        assert_eq!(ACT_SPEECH_OUCH, 235, "actor.h:271");
+        assert_eq!(ACT_SPEECH_WHOA, 244, "actor.h:280");
+        assert_eq!(ACT_SPEECH_UMPH, 245, "actor.h:281");
+        assert_eq!(ACT_SPEECH_WOW_50K, 246, "actor.h:282");
     }
 
     #[test]

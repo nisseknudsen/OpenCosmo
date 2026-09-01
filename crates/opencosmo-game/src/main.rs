@@ -192,6 +192,7 @@ fn main() {
         .init_resource::<enemy_ai::TransporterState>()
         .init_resource::<flow::LevelIntroTimer>()
         .init_resource::<effects::ShardXMode>()
+        .init_resource::<enemy_ai::SeenBubbles>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
