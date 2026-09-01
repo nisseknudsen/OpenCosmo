@@ -10,6 +10,7 @@ mod enemy;
 mod enemy_ai;
 mod flow;
 mod help;
+mod highscores;
 mod hints;
 mod hud;
 mod input;
@@ -171,6 +172,7 @@ fn main() {
             Ok("controls") => GameState::Controls,
             Ok("episodes") => GameState::Episodes,
             Ok("story") => GameState::TextPages,
+            Ok("scores") => GameState::HighScores,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
@@ -199,6 +201,9 @@ fn main() {
         .init_resource::<hints::SeenHints>()
         .init_resource::<data::ChosenEpisode>()
         .init_resource::<screen::TextPages>()
+        .insert_resource(highscores::HighScores::load())
+        .init_resource::<highscores::TableMode>()
+        .init_resource::<highscores::PendingEntry>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -231,6 +236,18 @@ fn main() {
             ),
         )
         // --- Gameplay ---
+        // Leaving a game is where the original checks the score.
+        .add_systems(OnExit(GameState::Playing), highscores::check_high_score)
+        .add_systems(
+            Update,
+            highscores::name_entry_input.run_if(in_state(GameState::Menu)),
+        )
+        .add_systems(OnEnter(GameState::HighScores), highscores::spawn_high_scores)
+        .add_systems(OnExit(GameState::HighScores), highscores::despawn_high_scores)
+        .add_systems(
+            Update,
+            highscores::high_scores_input.run_if(in_state(GameState::HighScores)),
+        )
         .add_systems(OnEnter(GameState::TextPages), screen::spawn_text_page)
         .add_systems(OnExit(GameState::TextPages), screen::despawn_text_pages)
         .add_systems(

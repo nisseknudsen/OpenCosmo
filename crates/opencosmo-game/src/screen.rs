@@ -28,6 +28,7 @@ pub enum GameState {
     Controls,
     Episodes,
     TextPages,
+    HighScores,
     Playing,
 }
 
@@ -195,6 +196,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     (" I)nstructions", MenuAction::Instructions),
     (" O)rdering Info.", MenuAction::Ordering),
     (" A)pogee's BBS", MenuAction::Bbs),
+    (" H)igh Scores", MenuAction::HighScores),
     (" C)redits", MenuAction::Credits),
     (" T)itle Screen", MenuAction::Title),
     (" Q)uit Game", MenuAction::Quit),
@@ -208,6 +210,7 @@ enum MenuAction {
     Instructions,
     Ordering,
     Bbs,
+    HighScores,
     Controls,
     Credits,
     Title,
@@ -291,6 +294,8 @@ pub fn menu_input(
         Some(MenuAction::Ordering)
     } else if keys.just_pressed(KeyCode::KeyA) {
         Some(MenuAction::Bbs)
+    } else if keys.just_pressed(KeyCode::KeyH) {
+        Some(MenuAction::HighScores)
     } else if keys.just_pressed(KeyCode::KeyC) {
         Some(MenuAction::Credits)
     } else if keys.just_pressed(KeyCode::KeyT) {
@@ -321,6 +326,7 @@ pub fn menu_input(
             pages.set(crate::textpages::BBS);
             next.set(GameState::TextPages);
         }
+        Some(MenuAction::HighScores) => next.set(GameState::HighScores),
         Some(MenuAction::Credits) => next.set(GameState::Credits),
         Some(MenuAction::Title) => next.set(GameState::Title),
         Some(MenuAction::Quit) => {
