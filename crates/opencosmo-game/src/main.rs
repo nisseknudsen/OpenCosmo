@@ -21,6 +21,7 @@ mod player;
 mod presentation;
 mod screen;
 mod sfx;
+mod textpages;
 mod tileset;
 mod trace;
 
@@ -169,6 +170,7 @@ fn main() {
             Ok("credits") => GameState::Credits,
             Ok("controls") => GameState::Controls,
             Ok("episodes") => GameState::Episodes,
+            Ok("story") => GameState::TextPages,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
@@ -196,6 +198,7 @@ fn main() {
         .init_resource::<enemy_ai::SeenBubbles>()
         .init_resource::<hints::SeenHints>()
         .init_resource::<data::ChosenEpisode>()
+        .init_resource::<screen::TextPages>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -228,6 +231,12 @@ fn main() {
             ),
         )
         // --- Gameplay ---
+        .add_systems(OnEnter(GameState::TextPages), screen::spawn_text_page)
+        .add_systems(OnExit(GameState::TextPages), screen::despawn_text_pages)
+        .add_systems(
+            Update,
+            screen::text_page_input.run_if(in_state(GameState::TextPages)),
+        )
         .add_systems(OnEnter(GameState::Episodes), screen::spawn_episodes)
         .add_systems(OnExit(GameState::Episodes), screen::despawn_episodes)
         .add_systems(
