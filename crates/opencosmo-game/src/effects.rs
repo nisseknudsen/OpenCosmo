@@ -321,6 +321,156 @@ pub fn tick_explosions(
     }
 }
 
+/// A piece of debris thrown by something breaking - `NewShard`
+/// (game1.c:6435-6470) and `MoveAndDrawShards` (game1.c:1780-1860).
+///
+/// Unlike a decoration, a shard has physics: it is flung upward for four
+/// ticks, then falls two rows a tick, bounces once off the first floor it
+/// meets, and dies at forty or on leaving the view. It is drawn flipped
+/// after the first tick, which is what makes debris read as tumbling.
+#[derive(Component)]
+pub struct Shard {
+    x: i32,
+    y: i32,
+    age: u32,
+    /// The horizontal drift, 0-4: east, west, still, double east, double
+    /// west (game1.c:6437-6445).
+    xmode: u32,
+    bounced: bool,
+    width_tiles: i32,
+    height_tiles: i32,
+}
+
+/// `xmode` is a single counter shared by every shard and never reset, so
+/// consecutive pieces fan out instead of moving together. cosmore flags
+/// that this makes debris differ on every run; keeping it as one counter
+/// rather than a per-shard random reproduces the fan.
+#[derive(Resource, Default)]
+pub struct ShardXMode(pub u32);
+
+/// `NewShard` (game1.c:6435).
+pub fn spawn_shard(
+    commands: &mut Commands,
+    effects: &EffectAssets,
+    xmode: &mut ShardXMode,
+    spr: u16,
+    frame: usize,
+    x: i32,
+    y: i32,
+) {
+    let Some(sprite) = effects.get(spr) else {
+        return;
+    };
+    let Some(image) = sprite.frames.get(frame).or_else(|| sprite.frames.first()) else {
+        return;
+    };
+    xmode.0 = (xmode.0 + 1) % 5;
+    commands.spawn((
+        Sprite {
+            image: image.clone(),
+            flip_y: true,
+            ..default()
+        },
+        Transform::from_translation(place(sprite, x, y)),
+        Shard {
+            x,
+            y,
+            age: 1,
+            xmode: xmode.0,
+            bounced: false,
+            width_tiles: (sprite.width_px / 8.0).ceil() as i32,
+            height_tiles: (sprite.height_px / 8.0).ceil() as i32,
+        },
+        LevelScoped,
+    ));
+}
+
+/// One tick of a shard's arc, as a pure function so the trajectory can be
+/// tested without a world. Returns false when the shard is spent.
+///
+/// The original expresses the bounce with a `goto` back to the top of the
+/// vertical section (game1.c:1806); resetting the age to 3 and re-running
+/// the same block is what that does.
+pub fn step_shard(sh: &mut Shard, solid_below: impl Fn(i32, i32) -> bool, visible: bool) -> bool {
+    match sh.xmode {
+        0 | 3 => sh.x += if sh.xmode == 3 { 2 } else { 1 },
+        1 | 4 => sh.x -= if sh.xmode == 4 { 2 } else { 1 },
+        _ => {}
+    }
+
+    loop {
+        if sh.age < 5 {
+            sh.y -= 2;
+        } else if sh.age == 5 {
+            sh.y -= 1;
+        } else if sh.age == 8 {
+            if solid_below(sh.x, sh.y + 1) {
+                sh.age = 3;
+                sh.y += 2;
+                continue;
+            }
+            sh.y += 1;
+        }
+
+        if sh.age >= 9 {
+            if sh.age > 16 && !visible {
+                return false;
+            }
+            for _ in 0..2 {
+                if !sh.bounced && solid_below(sh.x, sh.y + 1) {
+                    sh.age = 3;
+                    sh.bounced = true;
+                    break;
+                }
+                sh.y += 1;
+            }
+            if sh.age == 3 {
+                continue;
+            }
+        }
+        break;
+    }
+
+    sh.age += 1;
+    sh.age <= 40
+}
+
+pub fn tick_shards(
+    mut commands: Commands,
+    level: Res<crate::level::CurrentLevel>,
+    data: Res<GameData>,
+    scroll: Res<crate::camera::Scroll>,
+    mut query: Query<(Entity, &mut Shard, &mut Sprite, &mut Transform)>,
+) {
+    for (entity, mut sh, mut spr, mut transform) in &mut query {
+        let solid = |x: i32, y: i32| {
+            if x < 0 || y < 0 {
+                return false;
+            }
+            data.tile_attr(level.level.tile_at(x as usize, y as usize))
+                & crate::data::TILE_ATTR_BLOCK_SOUTH
+                != 0
+        };
+        let visible = crate::enemy_ai::is_visible_at(
+            sh.x, sh.y, sh.width_tiles, sh.height_tiles, scroll.x, scroll.y,
+        );
+        if !step_shard(&mut sh, solid, visible) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        // White on its first tick, tumbling after (game1.c:1855-1859).
+        spr.flip_y = sh.age != 1;
+        let h = sh.height_tiles as f32;
+        transform.translation = tile_topleft_to_center(
+            sh.x as f32,
+            sh.y as f32 - h + 1.0,
+            sh.width_tiles as f32 * 8.0,
+            sh.height_tiles as f32 * 8.0,
+        )
+        .extend(8.0);
+    }
+}
+
 pub fn tick_decorations(
     mut commands: Commands,
     mut query: Query<(Entity, &mut Decoration, &mut Sprite, &mut Transform)>,
@@ -370,5 +520,108 @@ pub fn tick_score_effects(
         }
         fx.y -= 1;
         transform.translation = place(sprite, fx.x, fx.y);
+    }
+}
+
+#[cfg(test)]
+mod shard_tests {
+    use super::*;
+
+    fn shard(xmode: u32) -> Shard {
+        Shard {
+            x: 20,
+            y: 20,
+            age: 1,
+            xmode,
+            bounced: false,
+            width_tiles: 1,
+            height_tiles: 1,
+        }
+    }
+
+    /// A floor at row 25, nothing else.
+    fn floor_at(row: i32) -> impl Fn(i32, i32) -> bool {
+        move |_x, y| y >= row
+    }
+
+    #[test]
+    fn a_shard_is_thrown_up_before_it_falls() {
+        let mut sh = shard(2); // no horizontal drift
+        let start = sh.y;
+        let mut highest = sh.y;
+        for _ in 0..8 {
+            step_shard(&mut sh, floor_at(100), true);
+            highest = highest.min(sh.y);
+        }
+        assert!(highest < start, "it should rise first, got {highest} vs {start}");
+    }
+
+    #[test]
+    fn a_shard_bounces_once_and_only_once() {
+        let mut sh = shard(2);
+        let mut bounces = 0;
+        for _ in 0..40 {
+            let was = sh.bounced;
+            step_shard(&mut sh, floor_at(25), true);
+            if sh.bounced && !was {
+                bounces += 1;
+            }
+        }
+        assert_eq!(bounces, 1, "the original bounces a shard exactly once");
+    }
+
+    #[test]
+    fn the_xmodes_fan_debris_out_in_five_ways() {
+        // east, west, still, double east, double west (game1.c:6437-6445).
+        let drift = |xmode| {
+            let mut sh = shard(xmode);
+            let x0 = sh.x;
+            for _ in 0..5 {
+                step_shard(&mut sh, floor_at(100), true);
+            }
+            sh.x - x0
+        };
+        assert_eq!(drift(0), 5, "east");
+        assert_eq!(drift(1), -5, "west");
+        assert_eq!(drift(2), 0, "still");
+        assert_eq!(drift(3), 10, "double east");
+        assert_eq!(drift(4), -10, "double west");
+    }
+
+    #[test]
+    fn a_shard_does_not_live_forever() {
+        let mut sh = shard(2);
+        let mut ticks = 0;
+        while step_shard(&mut sh, floor_at(1000), true) {
+            ticks += 1;
+            assert!(ticks < 200, "a shard that never expires would leak entities");
+        }
+        assert!(ticks <= 40, "it dies at forty (game1.c:1862)");
+    }
+
+    #[test]
+    fn a_shard_off_screen_is_dropped_early() {
+        let mut sh = shard(2);
+        for _ in 0..17 {
+            step_shard(&mut sh, floor_at(1000), true);
+        }
+        assert!(
+            !step_shard(&mut sh, floor_at(1000), false),
+            "past sixteen it is culled the moment it leaves the view"
+        );
+    }
+
+    #[test]
+    fn the_xmode_counter_is_shared_so_consecutive_shards_differ() {
+        // cosmore notes this counter is never reset, which is what makes a
+        // burst of debris fan out instead of moving as one.
+        let mut xm = ShardXMode::default();
+        let seen: Vec<u32> = (0..5)
+            .map(|_| {
+                xm.0 = (xm.0 + 1) % 5;
+                xm.0
+            })
+            .collect();
+        assert_eq!(seen, vec![1, 2, 3, 4, 0], "five distinct drifts in a row");
     }
 }

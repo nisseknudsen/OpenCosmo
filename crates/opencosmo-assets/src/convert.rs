@@ -60,6 +60,8 @@ pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
     65, // SPR_BABY_GHOST - hatched from an egg; placed only in episodes 2-3
     79, // SPR_FOUNTAIN - placed as SPA_FOUNTAIN_*, which is a special
         // actor (map_type < 31) and so never seen by the ACT_* scan above
+    131, // SPR_WORM_CRATE_SHARDS - debris, never placed
+    144, // SPR_SATELLITE_SHARDS - debris, never placed
 ];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;

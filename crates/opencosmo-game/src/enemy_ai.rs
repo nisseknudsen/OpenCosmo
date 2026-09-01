@@ -201,6 +201,11 @@ const DIR8_WEST_I: i32 = 7;
 const SPR_SPARKLE_SHORT: u16 = 15;
 const SPR_SMOKE: u16 = 97;
 const SPR_SMOKE_LARGE: u16 = 98;
+/// Shard sprites (sprite.h:86, 153, 166, 185).
+const SPR_MONUMENT: u16 = 64;
+const SPR_WORM_CRATE_SHARDS: u16 = 131;
+const SPR_SATELLITE_SHARDS: u16 = 144;
+const SPR_FALLING_FLOOR: u16 = 163;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
 const ACT_DOOR_BLUE: u16 = 11;
@@ -623,6 +628,8 @@ pub struct Enemy {
     /// behaviours stay pure; the priority gate in `sfx.rs` decides which
     /// of them is actually heard.
     pub sounds: Vec<u16>,
+    /// `NewShard` requests raised this tick, as (SPR_* id, frame, x, y).
+    pub shards: Vec<(u16, usize, i32, i32)>,
 }
 
 impl Enemy {
@@ -708,6 +715,7 @@ impl Enemy {
             won_level: false,
             decorations: Vec::new(),
             sounds: Vec::new(),
+            shards: Vec::new(),
         }
     }
 
@@ -748,6 +756,7 @@ impl Enemy {
             won_level: false,
             decorations: Vec::new(),
             sounds: Vec::new(),
+            shards: Vec::new(),
         }
     }
 
@@ -1890,7 +1899,7 @@ fn tick_jumping_bullet(e: &mut Enemy) {
 /// its own top, falls until something stops it, and breaks open when a
 /// blast reaches it - letting out a pink worm.
 ///
-/// NOT PORTED: the shards and the destruction sound. The explosion delay
+/// NOT PORTED: the explosion delay
 /// `data5` is seeded per-crate in the original from `GameRand`; here it
 /// comes from the actor's own PRNG on first tick, for the same effect.
 fn tick_worm_crate(e: &mut Enemy, level: &LevelJson, data: &GameData) {
@@ -1948,6 +1957,15 @@ pub fn burst_worm_crate(e: &mut Enemy) {
     }
     e.spawns.push((ACT_PINK_WORM, e.x, e.y));
     e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
+    // Seven pieces (game1.c:4712-4718); two share an origin, as written.
+    for (i, (dx, dy)) in [
+        (-1, 3), (0, -1), (1, 0), (0, 0), (3, 2), (0, 0), (5, 5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        e.shards.push((SPR_WORM_CRATE_SHARDS, i, e.x + dx, e.y + dy));
+    }
 }
 
 /// `ActSplittingPlatform` (game1.c:3354-3410). Holds a four-tile platform
@@ -2417,7 +2435,7 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
 /// score in the game. Three, not two: the frame climbs 0 -> 1 -> 2 -> 3
 /// and only the step onto 3 topples it (game1.c:5381-5387).
 ///
-/// NOT PORTED: the shards and the two score effects it throws.
+/// NOT PORTED: the two score effects it throws.
 fn tick_monument(e: &mut Enemy) {
     if e.d2 != 0 {
         e.dead = true;
@@ -2425,6 +2443,10 @@ fn tick_monument(e: &mut Enemy) {
             e.tile_writes.push((e.x + 1, e.y - i, TILE_EMPTY));
         }
         e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
+        // Six pieces of the pillar (game1.c:5346-5351).
+        for (dx, dy) in [(0, -8), (0, -7), (0, -6), (0, 0), (1, 0), (2, 0)] {
+            e.shards.push((SPR_MONUMENT, 3, e.x + dx, e.y + dy));
+        }
         // The dust cloud it collapses into (game1.c:5352-5355).
         for (dx, dy, dir) in [
             (0, 0, crate::effects::DIR8_NORTH),
@@ -2467,7 +2489,7 @@ pub fn blast_monument(e: &mut Enemy) -> bool {
 /// `ActSatellite` (game1.c:4728-4770). Two blasts destroy it and it drops
 /// a hamburger.
 ///
-/// NOT PORTED: the shards and the destruction sound.
+/// NOT PORTED: the destruction sound.
 fn tick_satellite(e: &mut Enemy) {
     if e.d2 != 0 {
         e.d2 -= 1;
@@ -2486,6 +2508,15 @@ pub fn blast_satellite(e: &mut Enemy) {
     }
     e.dead = true;
     e.sounds.push(crate::sfx::snd::DESTROY_SATELLITE);
+    // Eight pieces, each its own frame (game1.c:4756-4763).
+    for (i, (dx, dy)) in [
+        (0, -2), (1, -2), (7, 2), (3, -2), (-1, -8), (2, 3), (6, -2), (-4, 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        e.shards.push((SPR_SATELLITE_SHARDS, i, e.x + dx, e.y + dy));
+    }
     // A ring of smoke in every compass direction (game1.c:4750-4752).
     for dir in 1..9 {
         e.decorations
@@ -3066,6 +3097,7 @@ pub fn spawn_queued_actors(
     data: Res<GameData>,
     effects: Res<crate::effects::EffectAssets>,
     mut sfx: EventWriter<crate::sfx::PlaySfx>,
+    mut xmode: ResMut<crate::effects::ShardXMode>,
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
@@ -3078,6 +3110,7 @@ pub fn spawn_queued_actors(
     let mut writes = Vec::new();
     let mut decorations = Vec::new();
     let mut sounds: Vec<u16> = Vec::new();
+    let mut shards: Vec<(u16, usize, i32, i32)> = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
@@ -3090,6 +3123,9 @@ pub fn spawn_queued_actors(
         }
         if !e.sounds.is_empty() {
             sounds.append(&mut e.sounds);
+        }
+        if !e.shards.is_empty() {
+            shards.append(&mut e.shards);
         }
         if e.hold_player > 0 {
             if let Ok(mut player) = player_q.single_mut() {
@@ -3127,6 +3163,9 @@ pub fn spawn_queued_actors(
     }
     for number in sounds {
         sfx.write(crate::sfx::PlaySfx(number));
+    }
+    for (spr, frame, x, y) in shards {
+        crate::effects::spawn_shard(&mut commands, &effects, &mut xmode, spr, frame, x, y);
     }
 }
 
@@ -4015,7 +4054,6 @@ fn tick_suction_walker(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// `eastfree` for the same purpose, which look like collision flags and
 /// are not.
 ///
-/// NOT PORTED: the shards and `SND_DESTROY_SOLID` on impact.
 fn tick_falling_floor(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     let (w, h) = (e.width_tiles, e.height_tiles);
 
@@ -4025,6 +4063,9 @@ fn tick_falling_floor(e: &mut Enemy, player: &Player, level: &LevelJson, data: &
         // of the three episodes is placed on solid ground, so this only
         // ever fires after a fall.
         e.dead = true;
+        e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
+        e.shards.push((SPR_FALLING_FLOOR, 1, e.x, e.y));
+        e.shards.push((SPR_FALLING_FLOOR, 2, e.x, e.y));
         return;
     }
 
