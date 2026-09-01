@@ -66,6 +66,8 @@ pub fn collect_pickups(
     mut player_q: Query<&mut Player>,
     pickup_q: Query<(Entity, &Collectible)>,
     mut sfx: EventWriter<PlaySfx>,
+    mut seen: ResMut<crate::hints::SeenHints>,
+    mut hints: EventWriter<crate::hints::ShowHint>,
 ) {
     let Ok(mut player) = player_q.single_mut() else {
         return;
@@ -83,6 +85,13 @@ pub fn collect_pickups(
             continue;
         }
         commands.entity(entity).despawn();
+
+        // The first power-up explains what it did (game1.c:7477).
+        if pickup == crate::pickups::Pickup::PowerUp {
+            if let Some(hint) = seen.on_power_up() {
+                hints.write(crate::hints::ShowHint(hint));
+            }
+        }
 
         // Stars and power-ups get the louder jingle (game1.c:7393, 7475);
         // everything else the ordinary pickup blip (game1.c:7500, 7542).

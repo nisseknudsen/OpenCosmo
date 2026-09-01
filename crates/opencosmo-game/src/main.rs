@@ -193,6 +193,8 @@ fn main() {
         .init_resource::<flow::LevelIntroTimer>()
         .init_resource::<effects::ShardXMode>()
         .init_resource::<enemy_ai::SeenBubbles>()
+        .init_resource::<hints::SeenHints>()
+        .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -388,6 +390,8 @@ fn main() {
                 help::help_menu_input,
                 devmenu::open_level_warp,
                 devmenu::level_warp_input,
+                hints::show_hint,
+                hints::drain_queued_hint,
                 hints::close_hint,
                 flow::show_intermission,
                 flow::close_intermission,
