@@ -191,6 +191,7 @@ fn main() {
         .init_resource::<enemy_ai::SwitchState>()
         .init_resource::<enemy_ai::TransporterState>()
         .init_resource::<flow::LevelIntroTimer>()
+        .init_resource::<effects::ShardXMode>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -299,6 +300,7 @@ fn main() {
                 combat::explosion_bursts_containers,
                 actors::collapse_pedestals,
                 effects::tick_decorations,
+                effects::tick_shards,
                 effects::tick_score_effects,
             )
                 .chain()
