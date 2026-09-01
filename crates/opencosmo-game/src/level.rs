@@ -527,6 +527,89 @@ pub fn light_cast_distance(episode: u8) -> i32 {
 mod light_tests {
     use super::*;
 
+    /// Drives a fountain the way `move_fountains` does, without the Bevy
+    /// plumbing, so the cycle can be asserted.
+    fn step_fountain(f: &mut Fountain) {
+        if f.delay != 0 {
+            f.delay -= 1;
+            return;
+        }
+        f.step += 1;
+        if f.step == f.step_max {
+            f.step = 0;
+            f.north = !f.north;
+            f.delay = 10;
+            return;
+        }
+        if f.north {
+            f.y -= 1;
+            f.height += 1;
+        } else {
+            f.y += 1;
+            f.height -= 1;
+        }
+    }
+
+    fn fountain(map_type: i32) -> Fountain {
+        Fountain {
+            x: 10,
+            y: 20,
+            north: true,
+            step: 0,
+            step_max: map_type * 3,
+            height: 0,
+            delay: 0,
+        }
+    }
+
+    #[test]
+    fn a_fountain_returns_to_where_it_started() {
+        // It must be a closed cycle or the jet would walk up the level.
+        for map_type in 2..=5 {
+            let mut f = fountain(map_type);
+            let (y0, h0) = (f.y, f.height);
+            // Two full travels plus both pauses.
+            for _ in 0..((f.step_max + 10) * 2) {
+                step_fountain(&mut f);
+            }
+            assert_eq!((f.y, f.height), (y0, h0), "size {map_type} drifted");
+        }
+    }
+
+    #[test]
+    fn the_four_sizes_reach_different_heights() {
+        // stepmax = map_actor_type * 3 (game1.c:10231), so a bigger
+        // special actor makes a taller jet.
+        let peak = |map_type: i32| {
+            let mut f = fountain(map_type);
+            let mut high = 0;
+            for _ in 0..(f.step_max + 10) {
+                step_fountain(&mut f);
+                high = high.max(f.height);
+            }
+            high
+        };
+        let peaks: Vec<i32> = (2..=5).map(peak).collect();
+        assert_eq!(peaks, vec![5, 8, 11, 14], "small to huge");
+        assert!(peaks.windows(2).all(|w| w[0] < w[1]), "and strictly taller");
+    }
+
+    #[test]
+    fn a_fountain_never_rises_before_it_has_fallen_back() {
+        // The pause at each end is what makes it readable as a jet rather
+        // than a jitter (game1.c:1673).
+        let mut f = fountain(3);
+        let mut paused = 0;
+        for _ in 0..(f.step_max + 10) {
+            let before = f.height;
+            step_fountain(&mut f);
+            if f.height == before {
+                paused += 1;
+            }
+        }
+        assert!(paused >= 10, "it should hold at the top, held {paused}");
+    }
+
     #[test]
     fn a_platforms_route_is_read_out_of_the_map() {
         // The cell a platform sits on holds `DIR8 * 8` as its raw tile
@@ -708,6 +791,212 @@ pub fn move_platforms(
                 plat.y,
                 TILE_BLUE_PLATFORM + (i as u16 * 8),
             );
+        }
+    }
+}
+
+/// A water jet placed by `SPA_FOUNTAIN_SMALL`..`_HUGE` (map_type 2-5).
+///
+/// The jet rises and falls on a cycle whose length comes from which of the
+/// four sizes it is - `stepmax = map_actor_type * 3` (game1.c:10231) - and
+/// pausing ten ticks at each end. Its top two cells are stamped as
+/// invisible platform so the player can ride it, and the column of water
+/// below hurts on contact (game1.c:1696).
+#[derive(Component)]
+pub struct Fountain {
+    pub x: i32,
+    pub y: i32,
+    /// True while rising. Starts north (game1.c:10228).
+    pub north: bool,
+    pub step: i32,
+    pub step_max: i32,
+    /// How many cells of water are showing below the nozzle.
+    pub height: i32,
+    pub delay: i32,
+}
+
+/// `TILE_INVISIBLE_PLATFORM` (graphics.h:121) - solid to stand on, drawn
+/// as nothing, which is what lets the fountain carry the player without
+/// the platform itself being visible.
+const TILE_INVISIBLE_PLATFORM: u16 = 0x0048;
+
+pub fn spawn_level_fountains(commands: &mut Commands, level: &LevelJson) {
+    for a in &level.actors {
+        if !(2..=5).contains(&a.map_type) {
+            continue;
+        }
+        commands.spawn((
+            Fountain {
+                // The loader offsets both axes by one (game1.c:10226-10227).
+                x: a.x as i32 - 1,
+                y: a.y as i32 - 1,
+                north: true,
+                step: 0,
+                step_max: a.map_type as i32 * 3,
+                height: 0,
+                delay: 0,
+            },
+            LevelScoped,
+        ));
+    }
+}
+
+/// `MoveFountains` (game1.c:1660-1712).
+pub fn move_fountains(
+    mut commands: Commands,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    data: Res<GameData>,
+    mut tile_index: ResMut<TileIndex>,
+    mut current: ResMut<crate::level::CurrentLevel>,
+    mut fountains: Query<&mut Fountain>,
+    mut player_q: Query<&mut crate::player::Player>,
+) {
+    let Some(tileset) = tileset else {
+        return;
+    };
+    for mut f in &mut fountains {
+        if f.delay != 0 {
+            f.delay -= 1;
+            continue;
+        }
+        f.step += 1;
+        if f.step == f.step_max {
+            // Reached the end of its travel: turn around and hold.
+            f.step = 0;
+            f.north = !f.north;
+            f.delay = 10;
+            continue;
+        }
+
+        // Lift the platform before moving, so the cells it vacates do not
+        // stay solid behind it.
+        for dx in [0, 2] {
+            set_map_tile(
+                &mut commands, &tileset, &data, &mut tile_index,
+                &mut current.level, f.x + dx, f.y, 0,
+            );
+        }
+
+        if let Ok(mut player) = player_q.single_mut() {
+            let riding = player.dead_timer == 0
+                && f.y - 1 == player.y
+                && player.x >= f.x
+                && player.x <= f.x + 2;
+            if riding {
+                player.y += if f.north { -1 } else { 1 };
+            }
+        }
+
+        if f.north {
+            f.y -= 1;
+            f.height += 1;
+        } else {
+            f.y += 1;
+            f.height -= 1;
+        }
+
+        for dx in [0, 2] {
+            set_map_tile(
+                &mut commands, &tileset, &data, &mut tile_index,
+                &mut current.level, f.x + dx, f.y, TILE_INVISIBLE_PLATFORM,
+            );
+        }
+    }
+}
+
+/// One drawn cell of a fountain: the nozzle, or a length of its water.
+#[derive(Component)]
+pub struct FountainSprite {
+    owner: Entity,
+}
+
+/// `SPR_FOUNTAIN` (sprite.h:101).
+const SPR_FOUNTAIN: u16 = 79;
+
+/// `DrawFountains` (game1.c:1680-1706). Draws the nozzle and the column of
+/// water hanging below it, and hurts the player anywhere along that column.
+///
+/// The original redraws every cell each frame; here the column is rebuilt
+/// when its height changes, which is the only time it differs.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_fountains(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    data: Res<GameData>,
+    fountains: Query<(Entity, &Fountain)>,
+    cells: Query<(Entity, &FountainSprite)>,
+    mut player_q: Query<&mut crate::player::Player>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+    mut drawn: Local<bevy::platform::collections::HashMap<Entity, (i32, i32)>>,
+) {
+    let rel_dir = format!("sprites/actors/{SPR_FOUNTAIN}");
+    let manifest = data.load_sprite_manifest(&rel_dir);
+
+    for (entity, f) in &fountains {
+        // Rebuild only when the shape actually changed.
+        if drawn.get(&entity).copied() == Some((f.y, f.height)) {
+            continue;
+        }
+        drawn.insert(entity, (f.y, f.height));
+        for (cell, owned) in &cells {
+            if owned.owner == entity {
+                commands.entity(cell).despawn();
+            }
+        }
+        let Some(manifest) = manifest.as_ref() else {
+            continue;
+        };
+        let mut put = |frame: usize, x: i32, y: i32, commands: &mut Commands| {
+            let Some(meta) = manifest.frames.get(frame) else {
+                return;
+            };
+            let h_tiles = (meta.height_px as f32 / 8.0).ceil();
+            let pos = tile_topleft_to_center(
+                x as f32,
+                y as f32 - h_tiles + 1.0,
+                meta.width_px as f32,
+                meta.height_px as f32,
+            );
+            commands.spawn((
+                Sprite {
+                    image: asset_server
+                        .load(crate::data::asset_path(&format!("{rel_dir}/{}", meta.file))),
+                    ..default()
+                },
+                Transform::from_translation(pos.extend(6.0)),
+                FountainSprite { owner: entity },
+                LevelScoped,
+            ));
+        };
+        // The nozzle sits a row below the platform cells it stamps.
+        put(0, f.x, f.y + 1, &mut commands);
+        for i in 0..=f.height {
+            put(2, f.x + 1, f.y + i + 1, &mut commands);
+        }
+    }
+
+    // Standing in the water hurts (game1.c:1696).
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.dead_timer != 0 || player.is_invincible() || player.hurt_cooldown > 0 {
+        return;
+    }
+    for (_, f) in &fountains {
+        let in_column = player.x <= f.x + 1
+            && player.x + crate::player::PLAYER_WIDTH - 1 >= f.x + 1
+            && player.y >= f.y + 1
+            && player.y <= f.y + f.height + 1;
+        if in_column {
+            player.cling_dir = None;
+            player.health -= 1;
+            if player.health <= 0 {
+                player.dead_timer = 1;
+            } else {
+                sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::PLAYER_HURT));
+                player.hurt_cooldown = 44;
+            }
+            return;
         }
     }
 }

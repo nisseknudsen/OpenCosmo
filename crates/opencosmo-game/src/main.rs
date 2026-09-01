@@ -269,6 +269,8 @@ fn main() {
                 enemy_ai::run_transporters,
                 enemy_ai::run_pipes,
                 level::move_platforms,
+                level::move_fountains,
+                level::draw_fountains,
                 level::apply_light_switch,
                 enemy_ai::finish_on_boss_defeat,
             )
