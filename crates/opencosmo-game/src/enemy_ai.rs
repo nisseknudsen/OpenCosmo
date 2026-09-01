@@ -186,8 +186,9 @@ const BOSS_HITS: i32 = 12;
 
 /// `TILE_SWITCH_BLOCK_1` (graphics.h:124) - the solid a monument stands as.
 const TILE_SWITCH_BLOCK: u16 = 0x3d88;
-/// `ACT_PARACHUTE_BALL` (actor.h) - what a tulip launcher throws.
-const ACT_PARACHUTE_BALL: u16 = 22;
+/// `ACT_PARACHUTE_BALL` (actor.h:132). Note this is 86, not 22 - 22 is
+/// `ACT_SAW_BLADE_HORIZ`, which is what this used to throw.
+const ACT_PARACHUTE_BALL: u16 = 86;
 /// `ACT_HAMBURGER` (actor.h) - what a destroyed satellite drops.
 const ACT_HAMBURGER: u16 = 82;
 /// `DIR8_*` as table indices, for the pipe corners' `d5`.
@@ -4467,6 +4468,62 @@ mod tests {
             tick_eye_plant(&mut e, &p);
         }
         assert!(e.sounds.is_empty());
+    }
+
+    #[test]
+    fn the_actor_ids_spawned_at_runtime_are_the_right_ones() {
+        // Straight from actor.h. These are easy to get wrong because they
+        // are written once and never read back: ACT_PARACHUTE_BALL was 22
+        // for a while, which is ACT_SAW_BLADE_HORIZ, so the tulip launcher
+        // threw a saw blade that had no artwork and so drew nothing.
+        assert_eq!(ACT_PARACHUTE_BALL, 86, "actor.h:132");
+        assert_eq!(ACT_BABY_GHOST, 65, "actor.h:114");
+        assert_eq!(ACT_HAMBURGER, 82, "actor.h:128");
+        assert_eq!(ACT_PINK_WORM, 124, "actor.h:166");
+        assert_eq!(ACT_PROJECTILE_W, 109, "actor.h:151");
+        assert_eq!(ACT_PROJECTILE_E, 110, "actor.h:152");
+        assert_eq!(ACT_PROJECTILE_SW, 66, "actor.h:115");
+        assert_eq!(ACT_PROJECTILE_SE, 67, "actor.h:116");
+        assert_eq!(ACT_PROJECTILE_S, 68, "actor.h:117");
+    }
+
+    #[test]
+    fn everything_spawned_at_runtime_has_artwork_to_draw() {
+        // A sprite is only converted if some level places it, so an actor
+        // that exists only at runtime needs forcing into the conversion.
+        // Without that the spawn silently produces nothing - which is how
+        // the turrets came to fire invisible projectiles.
+        use opencosmo_assets::actor_sprite_map::ACT_TO_SPRITE;
+        let spr_of = |act: u16| {
+            ACT_TO_SPRITE
+                .iter()
+                .find(|(id, ..)| *id == act)
+                .map(|(_, s, ..)| *s)
+                .unwrap_or(act)
+        };
+        let forced: Vec<u16> = opencosmo_assets::convert::EFFECT_SPRITES
+            .iter()
+            .chain(opencosmo_assets::convert::RUNTIME_SPAWNED_SPRITES)
+            .copied()
+            .collect();
+        // Every actor a behaviour can spawn out of thin air.
+        for act in [
+            ACT_PROJECTILE_W,
+            ACT_PROJECTILE_E,
+            ACT_PROJECTILE_SW,
+            ACT_PROJECTILE_SE,
+            ACT_PROJECTILE_S,
+            ACT_BABY_GHOST,
+            ACT_HAMBURGER,
+        ] {
+            let spr = spr_of(act);
+            assert!(
+                forced.contains(&spr),
+                "ACT {act} draws SPR {spr}, which no level is guaranteed to \
+                 place - add it to RUNTIME_SPAWNED_SPRITES or it will spawn \
+                 invisible"
+            );
+        }
     }
 
     #[test]

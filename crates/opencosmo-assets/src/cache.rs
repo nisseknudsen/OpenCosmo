@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::path::Path;
 
 /// Bump this whenever decode/convert logic changes, to invalidate old caches.
-pub const CONVERTER_VERSION: u32 = 12;
+pub const CONVERTER_VERSION: u32 = 13;
 
 const STAMP_FILE: &str = ".cache-stamp";
 

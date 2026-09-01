@@ -368,7 +368,6 @@ pub fn check_level_exit(
     exit_q: Query<&ExitTrigger>,
     sign_q: Query<&crate::actors::ExitSign>,
     player_q: Query<&Player>,
-    scroll: Res<crate::camera::Scroll>,
     stars: Res<Stars>,
     mut sequence: ResMut<LevelSequence>,
     mut finished: EventWriter<LevelFinished>,
@@ -383,15 +382,19 @@ pub fn check_level_exit(
     let touching = exit_q
         .iter()
         .any(|e| (e.x - player.x).abs() <= 2 && (e.y - player.y).abs() <= 3);
-    // The exit sign ends the level on coming into view rather than on
-    // contact - see `actors::EXIT_ACT_IDS` for why.
-    let sign_in_view = sign_q.iter().any(|s| {
-        s.x >= scroll.x
-            && s.x < scroll.x + crate::camera::SCROLL_W
-            && s.y >= scroll.y
-            && s.y < scroll.y + crate::camera::SCROLL_H
-    });
-    if touching || sign_in_view {
+    // The exit sign ends the level on *contact*, not on coming into view.
+    // `InteractPlayer` bails out early unless the player is touching the
+    // actor (game1.c:7386) and only then reaches the switch that sets
+    // `winLevel` for SPR_EXIT_SIGN (game1.c:7551).
+    //
+    // This used to fire the moment a sign scrolled on screen, which ended
+    // A1 from across the room - and because the first level of a section
+    // has no intermission, that read as being teleported into A2 for no
+    // reason.
+    let touching_sign = sign_q
+        .iter()
+        .any(|s| (s.x - player.x).abs() <= 2 && (s.y - player.y).abs() <= 3);
+    if touching || touching_sign {
         // `StartSound(SND_WIN_LEVEL)` fires on every level win
         // (game1.c:10171), intermission or not - which is the only
         // acknowledgement you get for the levels that have no frame.
@@ -407,6 +410,91 @@ pub fn check_level_exit(
 /// Marks the between-levels frame.
 #[derive(Component)]
 pub struct IntermissionUi;
+
+/// Marks the "Now entering level N" frame.
+#[derive(Component)]
+pub struct LevelIntroUi;
+
+/// Time left on the level intro, in seconds.
+#[derive(Resource, Default)]
+pub struct LevelIntroTimer(pub f32);
+
+/// `mapnums` (game2.c:3698) - the level *number shown to the player*,
+/// indexed by sequence position. Zero means no intro: the bonus stages are
+/// not numbered, which is why only two levels in each group of four
+/// announce themselves.
+const LEVEL_DISPLAY_NUM: [u8; 18] = [1, 2, 0, 0, 3, 4, 0, 0, 5, 6, 0, 0, 7, 8, 0, 0, 9, 10];
+
+pub fn level_display_number(index: usize) -> Option<u8> {
+    LEVEL_DISPLAY_NUM.get(index).copied().filter(|n| *n != 0)
+}
+
+/// How long the intro holds: `WaitSoft(150)` against the 140Hz rate
+/// `gameTickCount` counts at (game1.c:8048, inside `PCSpeakerService`).
+const LEVEL_INTRO_SECS: f32 = 150.0 / 140.0;
+
+/// `ShowLevelIntro` (game2.c:3696-3713). Announces the level being entered
+/// before play starts.
+///
+/// Without this, finishing a level with no intermission - which is every
+/// first level of a section, A1 included - dropped the player straight into
+/// the next one with no acknowledgement at all.
+///
+/// NOT PORTED: the original clears and fades the screen around this, so the
+/// new level is not visible behind the frame; here it is.
+pub fn show_level_intro(
+    mut commands: Commands,
+    mut events: EventReader<EnterLevel>,
+    sequence: Res<LevelSequence>,
+    hud: Res<crate::hud::HudAssets>,
+    ui_camera: Res<crate::screen::UiCamera>,
+    mut paused: ResMut<crate::help::Paused>,
+    mut timer: ResMut<LevelIntroTimer>,
+    mut sfx: EventWriter<PlaySfx>,
+) {
+    if events.read().last().is_none() {
+        return;
+    }
+    let Some(number) = level_display_number(sequence.index) else {
+        return; // a bonus stage announces nothing
+    };
+    paused.0 = true;
+    timer.0 = LEVEL_INTRO_SECS;
+    sfx.write(PlaySfx(snd::ENTERING_LEVEL_NUM));
+    // `UnfoldTextFrame(7, 3, 24, ...)` with the number drawn flush-right
+    // on the row below the title (game2.c:3704-3712).
+    let frame = crate::panel::TextFrame::new(7, 3, 24, "  Now entering level", "");
+    let digits = number.to_string();
+    let end_col = frame.text_x() + 20;
+    let x = end_col - (digits.len() as i32 - 1);
+    frame
+        .line(x, 8, &digits)
+        .spawn(&mut commands, &hud, ui_camera.0, LevelIntroUi);
+}
+
+/// The intro clears itself after its hold, or early on a keypress -
+/// `WaitSoft` polls the keyboard and breaks out (game2.c:658-665).
+pub fn close_level_intro(
+    mut commands: Commands,
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut timer: ResMut<LevelIntroTimer>,
+    mut paused: ResMut<crate::help::Paused>,
+    open: Query<Entity, With<LevelIntroUi>>,
+) {
+    if open.is_empty() {
+        return;
+    }
+    timer.0 -= time.delta_secs();
+    if timer.0 > 0.0 && keys.get_just_pressed().next().is_none() {
+        return;
+    }
+    for entity in &open {
+        commands.entity(entity).despawn();
+    }
+    timer.0 = 0.0;
+    paused.0 = false;
+}
 
 /// Shows "Section Completed!" / "Bonus Level Completed!!" over the finished
 /// level and waits for a key (`ShowSectionIntermission`, game1.c:10009 and
@@ -532,6 +620,29 @@ pub fn enter_level(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_numbered_levels_announce_themselves() {
+        // mapnums (game2.c:3698): the two main levels of each group of
+        // four are numbered; the bonus stages are not, and get no intro.
+        assert_eq!(level_display_number(0), Some(1), "A1 is level 1");
+        assert_eq!(level_display_number(1), Some(2), "A2 is level 2");
+        assert_eq!(level_display_number(2), None, "bonus stages are unnumbered");
+        assert_eq!(level_display_number(3), None);
+        assert_eq!(level_display_number(4), Some(3), "and the count skips them");
+        assert_eq!(level_display_number(17), Some(10));
+        assert_eq!(level_display_number(99), None, "off the end is not a level");
+    }
+
+    #[test]
+    fn every_group_of_four_announces_exactly_twice() {
+        for group in 0..4 {
+            let announced = (0..4)
+                .filter(|i| level_display_number(group * 4 + i).is_some())
+                .count();
+            assert_eq!(announced, 2, "group {group}");
+        }
+    }
 
     fn player_with(health: i32, cells: u32, bombs: u32) -> Player {
         let mut p = Player::spawn_at(0, 0);

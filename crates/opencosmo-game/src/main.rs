@@ -190,6 +190,7 @@ fn main() {
         .init_resource::<level::TileIndex>()
         .init_resource::<enemy_ai::SwitchState>()
         .init_resource::<enemy_ai::TransporterState>()
+        .init_resource::<flow::LevelIntroTimer>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -387,6 +388,10 @@ fn main() {
                 flow::close_intermission,
                 flow::restart_level,
                 flow::enter_level,
+                // After enter_level, so the intro is raised for the level
+                // that was just loaded rather than the one being left.
+                flow::show_level_intro,
+                flow::close_level_intro,
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
