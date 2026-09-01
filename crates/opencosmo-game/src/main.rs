@@ -464,11 +464,7 @@ fn insert_core_resources(app: &mut App) {
 /// point where nothing is holding a handle into the old episode.
 fn apply_chosen_episode(
     mut chosen: ResMut<data::ChosenEpisode>,
-    asset_server: Res<AssetServer>,
     mut data: ResMut<GameData>,
-    mut effect_assets: ResMut<effects::EffectAssets>,
-    mut sfx_assets: ResMut<sfx::SfxAssets>,
-    mut sequence: ResMut<LevelSequence>,
 ) {
     let Some(episode) = chosen.0.take() else {
         return;
@@ -477,21 +473,15 @@ fn apply_chosen_episode(
         return;
     }
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    let fresh = GameData::load_episode(&assets_dir, episode);
-    // Assigned rather than inserted through `Commands`: `setup_game` reads
-    // `GameData` in the same run, and a deferred insert would hand it the
-    // episode being left.
-    *effect_assets = effects::EffectAssets::load(&asset_server, &fresh);
-    *sfx_assets = sfx::SfxAssets::load(&asset_server, &fresh);
-    *data = fresh;
-    // Each episode names its levels differently, so the progression has to
-    // be rebuilt too or the warp list would still show the old one.
-    let start = data
-        .level_order()
-        .first()
-        .cloned()
-        .unwrap_or_else(|| START_LEVEL.to_string());
-    *sequence = LevelSequence::build(&data, &start);
+    // Only `GameData` is swapped here. Everything keyed off it - the level
+    // progression, the effect and sound assets, the tileset - is rebuilt
+    // by `setup_game`, which runs next in the same chain and reads this.
+    //
+    // Assigned rather than inserted through `Commands` for that reason: a
+    // deferred insert would hand `setup_game` the episode being left. And
+    // it must not touch the asset resources, which do not exist yet on the
+    // first entry into a game - `setup_game` is what creates them.
+    *data = GameData::load_episode(&assets_dir, episode);
     info!("switched to episode {episode}");
 }
 
