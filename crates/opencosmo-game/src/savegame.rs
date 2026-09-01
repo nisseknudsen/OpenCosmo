@@ -196,6 +196,7 @@ pub fn slot_prompt_input(
     data: Res<crate::data::GameData>,
     checkpoint: Res<crate::flow::Checkpoint>,
     sequence: Res<crate::flow::LevelSequence>,
+    cheats: Res<crate::cheats::CheatState>,
     mut restored: EventWriter<RestoredGame>,
     open: Query<Entity, With<SlotPromptUi>>,
 ) {
@@ -238,7 +239,9 @@ pub fn slot_prompt_input(
     match *prompt {
         SlotPrompt::Save => {
             // The checkpoint, not the live state - the prompt says so.
-            let save = SaveGame::from_checkpoint(&checkpoint, sequence.index, false);
+            // The cheat flag rides along, so a cheated game stays cheated
+            // across a save (game1.c:9375).
+            let save = SaveGame::from_checkpoint(&checkpoint, sequence.index, cheats.used);
             if let Err(err) = save.save(data.episode, slot) {
                 warn!("could not save to slot {slot}: {err}");
             }
@@ -272,6 +275,7 @@ pub fn apply_restored_game(
     mut checkpoint: ResMut<crate::flow::Checkpoint>,
     mut sequence: ResMut<crate::flow::LevelSequence>,
     mut enter: EventWriter<crate::flow::EnterLevel>,
+    mut cheats: ResMut<crate::cheats::CheatState>,
     mut player_q: Query<&mut crate::player::Player>,
 ) {
     let Some(RestoredGame(save)) = events.read().last() else {
@@ -289,6 +293,7 @@ pub fn apply_restored_game(
         player.health_cells = save.health_cells as u32;
         player.bombs = save.bombs as u32;
     }
+    cheats.used = save.used_cheat;
     let index = (save.level as usize).min(sequence.order.len().saturating_sub(1));
     sequence.index = index;
     enter.write(crate::flow::EnterLevel {

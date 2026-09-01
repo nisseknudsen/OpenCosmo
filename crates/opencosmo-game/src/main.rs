@@ -1,6 +1,7 @@
 mod actors;
 mod audio;
 mod camera;
+mod cheats;
 mod combat;
 mod controls_screen;
 mod data;
@@ -206,6 +207,7 @@ fn main() {
         .init_resource::<highscores::TableMode>()
         .init_resource::<highscores::PendingEntry>()
         .init_resource::<savegame::SlotPrompt>()
+        .init_resource::<cheats::CheatState>()
         .add_event::<savegame::OpenSlotPrompt>()
         .add_event::<savegame::RestoredGame>()
         .add_event::<hints::ShowHint>()
@@ -429,6 +431,8 @@ fn main() {
         .add_systems(
             Update,
             (
+                cheats::cheat_input,
+                cheats::close_cheat_message,
                 help::help_menu_input,
                 savegame::open_slot_prompt,
                 savegame::slot_prompt_input,
