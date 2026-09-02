@@ -626,3 +626,32 @@ mod shard_tests {
         assert_eq!(seen, vec![1, 2, 3, 4, 0], "five distinct drifts in a row");
     }
 }
+
+/// `SPR_SCOOTER_EXHAUST` (sprite.h:41).
+const SPR_SCOOTER_EXHAUST: u16 = 19;
+
+/// Draws the puffs the scooter mover asked for.
+pub fn spawn_scooter_exhaust(
+    mut commands: Commands,
+    effects: Res<EffectAssets>,
+    mut events: EventReader<crate::player::ScooterExhaust>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+) {
+    let mut any = false;
+    for puff in events.read() {
+        spawn_decoration(
+            &mut commands,
+            &effects,
+            SPR_SCOOTER_EXHAUST,
+            4,
+            puff.x,
+            puff.y,
+            puff.dir,
+            1,
+        );
+        any = true;
+    }
+    if any {
+        sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::SCOOTER_PUTT));
+    }
+}

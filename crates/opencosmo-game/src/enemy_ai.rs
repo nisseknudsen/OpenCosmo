@@ -219,6 +219,8 @@ const SPR_FALLING_FLOOR: u16 = 163;
 const SPR_BGHOST_EGG_SHARD: u16 = 76;
 /// `SPR_PYRAMID` (sprite.h) and `ACT_STAR_FLOAT` (actor.h:45).
 const SPR_PYRAMID: u16 = 49;
+/// `SPR_ROCKET` (sprite.h).
+const SPR_ROCKET: u16 = 188;
 const ACT_STAR_FLOAT: u16 = 1;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
@@ -575,11 +577,12 @@ impl Default for SwitchState {
 pub struct SeenBubbles {
     pub pusher_robot: bool,
     pub bear_trap: bool,
-    pub transporter: bool,
-    pub pipe: bool,
     pub mystery_wall: bool,
     pub boss: bool,
-    pub pounce_streak: bool,
+    /// The transporter and the pipes raise theirs from systems rather than
+    /// behaviours, so they carry their own one-shots there.
+    pub transporter: bool,
+    pub pipe: bool,
 }
 
 /// `activeTransporter` / `transporterTimeLeft` (game1.c:4085-4122). A
@@ -670,6 +673,8 @@ pub struct Enemy {
     pub bubble: Option<u16>,
     /// `NewExplosion` requests raised this tick.
     pub explosions: Vec<(i32, i32)>,
+    /// Set by the rocket while it is lifting a rider.
+    pub carry_player: bool,
 }
 
 impl Enemy {
@@ -759,6 +764,7 @@ impl Enemy {
             score_award: 0,
             bubble: None,
             explosions: Vec::new(),
+            carry_player: false,
         }
     }
 
@@ -803,6 +809,7 @@ impl Enemy {
             score_award: 0,
             bubble: None,
             explosions: Vec::new(),
+            carry_player: false,
         }
     }
 
@@ -2127,9 +2134,11 @@ fn tick_door(e: &mut Enemy, switches: &SwitchState, level: &LevelJson) {
 /// the original shoves the player up with it, which needs player state the
 /// port does not have, so this flies without a passenger.
 ///
-/// NOT PORTED: the sounds, the shards and the two explosions it leaves,
-/// and carrying the player.
-fn tick_rocket(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+/// Riding it is the point: a player standing on the nose is pinned there
+/// and carried up with it (game1.c:5237-5245).
+///
+/// NOT PORTED: the sounds, and the two explosions it leaves.
+fn tick_rocket(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     if e.d1 != 0 {
         e.d1 -= 1;
         // Exhaust on the pad, alternating sides (game1.c:5185-5191).
@@ -2177,8 +2186,17 @@ fn tick_rocket(e: &mut Enemy, level: &LevelJson, data: &GameData) {
         e.d4 = i32::from(e.d4 == 0);
     }
 
+    // A rider on the nose is held on and lifted (game1.c:5237-5245).
+    if e.d2 != 0 && e.x == player.x && e.y - 7 <= player.y && e.y - 4 >= player.y {
+        e.carry_player = true;
+    }
+
     if e.d5 != 0 {
         e.dead = true;
+        e.sounds.push(crate::sfx::snd::EXPLOSION);
+        for (i, dx) in [0, 1, 2].into_iter().enumerate() {
+            e.shards.push((SPR_ROCKET, i + 1, e.x + dx, e.y));
+        }
     }
 }
 
@@ -2659,12 +2677,17 @@ pub fn cliffhanger_lines(act_id: u16) -> Option<&'static [&'static str]> {
 /// `ActScooter` (game1.c:5303-5330). Left alone it bobs on the spot,
 /// settling onto whatever is below it every tenth tick.
 ///
-/// NOT PORTED: being ridden. Mounting it makes the scooter follow the
-/// player and the player follow the scooter's controls, which needs a
-/// vehicle state the port does not have; unridden, this is exactly what it
-/// does.
-fn tick_scooter(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+/// `ActScooter` (game1.c:5303-5330). Left alone it bobs on the spot; once
+/// mounted it simply follows the player, who is now flying it.
+fn tick_scooter(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
     e.frame = (e.frame + 1) & 3;
+
+    if player.scooter != 0 {
+        // Ridden: it sits under the player (game1.c:5310).
+        e.x = player.x;
+        e.y = player.y + 1;
+        return;
+    }
 
     e.d2 += 1;
     if e.d2 % 10 != 0 {
@@ -3129,7 +3152,7 @@ pub fn tick_enemies(
             EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
             EnemyKind::SplittingPlatform => tick_splitting_platform(&mut e, player),
             EnemyKind::Door => tick_door(&mut e, &switches, &level),
-            EnemyKind::Rocket => tick_rocket(&mut e, &level, &data),
+            EnemyKind::Rocket => tick_rocket(&mut e, player, &level, &data),
             EnemyKind::JumpPadRobot => tick_jump_pad_robot(&mut e, &level, &data),
             EnemyKind::IvyPlant => tick_ivy_plant(&mut e),
             EnemyKind::HeadSwitch => tick_head_switch(&mut e, &mut switches),
@@ -3144,7 +3167,7 @@ pub fn tick_enemies(
             EnemyKind::Monument => tick_monument(&mut e),
             EnemyKind::Satellite => tick_satellite(&mut e),
             EnemyKind::TulipLauncher => tick_tulip_launcher(&mut e),
-            EnemyKind::Scooter => tick_scooter(&mut e, &level, &data),
+            EnemyKind::Scooter => tick_scooter(&mut e, player, &level, &data),
             EnemyKind::BearTrap => {
                 let hold = tick_bear_trap(&mut e, player);
                 if hold > 0 {
@@ -3261,6 +3284,20 @@ pub fn spawn_queued_actors(
         }
         if !e.explosions.is_empty() {
             explosions.append(&mut e.explosions);
+        }
+        if e.carry_player {
+            e.carry_player = false;
+            if let Ok(mut player) = player_q.single_mut() {
+                // Pinned to the nose: held out of a fall and pulled up one
+                // row per tick, which is what riding one feels like.
+                player.is_falling = false;
+                player.fall_time = 0;
+                player.recoil_left = 16;
+                player.is_recoiling = true;
+                player.clear_dizzy();
+                player.long_jumping = false;
+                player.y = e.y - 5;
+            }
         }
         if let Some(act) = e.bubble.take() {
             // The one-shot gate: which flag depends on what raised it.
@@ -3507,6 +3544,34 @@ pub fn run_transporters(
     }
     state.active = 0;
     state.time_left = 0;
+}
+
+/// Landing on a scooter while falling mounts it (game1.c:7682-7687).
+pub fn mount_scooter(
+    mut player_q: Query<&mut Player>,
+    scooters: Query<&Enemy>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+) {
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.scooter != 0 || player.dead_timer != 0 || !player.is_falling {
+        return;
+    }
+    for e in &scooters {
+        if e.kind != EnemyKind::Scooter || e.dead {
+            continue;
+        }
+        if e.x == player.x && (e.y == player.y || e.y + 1 == player.y) {
+            // Four ticks of forced lift, then free flight.
+            player.scooter = 4;
+            player.is_falling = false;
+            player.fall_time = 0;
+            player.push = None;
+            sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::PLAYER_LAND));
+            return;
+        }
+    }
 }
 
 /// The pipe network (game1.c:7613-7656).
@@ -4599,7 +4664,7 @@ mod tests {
         e.width_tiles = 1;
         e.height_tiles = 1;
         for _ in 0..200 {
-            tick_scooter(&mut e, &level, &data);
+            tick_scooter(&mut e, &Player::spawn_at(0, 0), &level, &data);
             assert!(e.y < 3, "it must not sink into the floor (y={})", e.y);
         }
         assert!(e.y >= 1, "and should have fallen toward it");
@@ -5376,7 +5441,7 @@ mod tests {
         e.d2 = 10;
 
         for _ in 0..60 {
-            tick_rocket(&mut e, &level, &data);
+            tick_rocket(&mut e, &Player::spawn_at(0, 0), &level, &data);
         }
         assert_eq!(e.y, 4, "it should still be on the pad during the fuse");
 
@@ -5384,7 +5449,7 @@ mod tests {
             if e.dead {
                 break;
             }
-            tick_rocket(&mut e, &level, &data);
+            tick_rocket(&mut e, &Player::spawn_at(0, 0), &level, &data);
         }
         assert!(e.dead, "it should destroy itself against the ceiling");
         assert!(e.y >= 1, "and not fly through it, ending at {}", e.y);

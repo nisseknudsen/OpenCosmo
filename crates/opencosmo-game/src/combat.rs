@@ -535,6 +535,23 @@ mod tests {
     }
 
     #[test]
+    fn a_pounce_leaves_falling_set_but_gates_gravity_off() {
+        // The original's TryPounce does not touch isPlayerFalling
+        // (game1.c:6857); the recoil flag is what stops gravity, and the
+        // movement tick tests `is_falling && !is_recoiling`. Clearing
+        // falling here instead - which this used to do - broke stepping
+        // off a scooter, which sets falling and then calls this for its
+        // side effects.
+        let mut player = Player::spawn_at(0, 0);
+        player.pounce_ready = true;
+        player.is_falling = true;
+        assert!(player.try_pounce(7));
+        assert!(player.is_falling, "still falling as far as the flag goes");
+        assert!(player.is_recoiling, "but recoil owns the vertical motion");
+        assert!(player.recoil_left > 0);
+    }
+
+    #[test]
     fn an_unaligned_pounce_is_refused_however_fast_the_fall() {
         // `isPounceReady` is what separates landing on something from
         // merely overlapping it while falling past (game1.c:6855).

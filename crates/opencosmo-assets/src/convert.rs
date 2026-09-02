@@ -68,6 +68,7 @@ pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
     244, // SPR_SPEECH_WHOA
     245, // SPR_SPEECH_UMPH
     246, // SPR_SPEECH_WOW_50K
+    19,  // SPR_SCOOTER_EXHAUST - emitted only while riding one
 ];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;

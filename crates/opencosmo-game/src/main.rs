@@ -213,6 +213,7 @@ fn main() {
         .add_event::<savegame::OpenSlotPrompt>()
         .add_event::<savegame::RestoredGame>()
         .add_event::<flow::ShowCliffhanger>()
+        .add_event::<player::ScooterExhaust>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -330,6 +331,8 @@ fn main() {
                 enemy_ai::draw_force_field_beams,
                 enemy_ai::run_transporters,
                 enemy_ai::run_pipes,
+                enemy_ai::mount_scooter,
+                effects::spawn_scooter_exhaust,
                 level::move_platforms,
                 level::move_fountains,
                 level::draw_fountains,

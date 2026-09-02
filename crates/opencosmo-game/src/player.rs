@@ -83,6 +83,10 @@ pub struct Player {
     /// movement commands are ignored, which is what `blockMovementCmds`
     /// does there.
     pub push: Option<Push>,
+    /// `scooterMounted` (game1.c:237). Set to 4 on mounting and counted
+    /// down to 1, which is what gives the scooter its initial lift; it
+    /// stays 1 for as long as the player is riding.
+    pub scooter: u32,
     /// `isPlayerInPipe` - riding the pipe network. The player is drawn
     /// hidden and cannot be hurt while inside one (game1.c:6905).
     pub in_pipe: bool,
@@ -170,6 +174,7 @@ impl Player {
             idle_count: 0,
             invincible_ticks: 0,
             push: None,
+            scooter: 0,
             in_pipe: false,
             dizzy_queued: false,
             dizzy_left: 0,
@@ -234,8 +239,11 @@ impl Player {
         }
         self.recoil_left = recoil + 1;
         self.is_recoiling = true;
-        self.is_falling = false;
-        self.fall_time = 0;
+        // Deliberately does *not* clear `is_falling`/`fall_time`: the
+        // original's TryPounce leaves both alone (game1.c:6857-6858) and
+        // lets the recoil branch of MovePlayer sort them out. Clearing
+        // them here also broke stepping off a scooter, which sets falling
+        // and then calls this for its side effects.
         // Landing on something shakes off a queued head-shake
         // (game1.c:6859).
         self.clear_dizzy();
@@ -588,6 +596,133 @@ fn move_player_push(
     true
 }
 
+/// `MovePlayerScooter` (game1.c:8880-9040). Riding one replaces the whole
+/// walking model: the player flies freely in four directions, held by
+/// walls rather than by gravity, and jumping steps off it.
+///
+/// Returns the exhaust puffs to emit, since the mover itself stays a pure
+/// function over the player and the level.
+///
+/// NOT PORTED: dropping bombs sideways while riding, which is a second
+/// copy of the bomb path with its own reach tests.
+/// One puff of scooter exhaust, drained by a system with the assets.
+#[derive(Event)]
+pub struct ScooterExhaust {
+    pub x: i32,
+    pub y: i32,
+    pub dir: usize,
+}
+
+pub fn move_player_scooter(
+    p: &mut Player,
+    scroll: &mut crate::camera::Scroll,
+    level: &crate::data::LevelJson,
+    data: &GameData,
+    input: &PlayerInput,
+    map_width: i32,
+) -> Vec<(i32, i32, usize)> {
+    let mut exhaust = Vec::new();
+    p.clear_dizzy();
+    p.pounce_ready = false;
+    p.recoil_left = 0;
+    p.is_falling = false;
+    if p.dead_timer != 0 {
+        return exhaust;
+    }
+
+    // The first few ticks after mounting force it upward, which is the
+    // lift that gets the player clear of whatever they landed on.
+    let forced_up = p.scooter > 1;
+    if forced_up {
+        p.scooter -= 1;
+    } else if input.jump {
+        // Stepping off: a jump, with the recoil of a small pounce.
+        p.cmd_jump_latch = true;
+        p.scooter = 0;
+        p.is_falling = true;
+        p.fall_time = 1;
+        p.is_recoiling = false;
+        p.pounce_ready = true;
+        p.try_pounce(9);
+        p.recoil_left -= 2;
+        return exhaust;
+    }
+
+    let blocked = |dir: Direction, x: i32, y: i32| {
+        let mut ignored = false;
+        test_move(dir, x, y, level, data, &mut ignored) != MoveResult::Free
+    };
+
+    if input.west && !input.east {
+        if p.face_dir == FaceDir::West {
+            p.x -= 1;
+        }
+        p.face_dir = FaceDir::West;
+        if p.x < 1 {
+            p.x += 1;
+        }
+        if blocked(Direction::West, p.x, p.y) || blocked(Direction::West, p.x, p.y + 1) {
+            p.x += 1;
+        }
+        if p.x % 2 != 0 {
+            exhaust.push((p.x + 3, p.y + 1, crate::effects::DIR8_EAST));
+        }
+    }
+
+    if input.east && !input.west {
+        if p.face_dir != FaceDir::West {
+            p.x += 1;
+        }
+        p.face_dir = FaceDir::East;
+        if map_width - 4 < p.x {
+            p.x -= 1;
+        }
+        if blocked(Direction::East, p.x, p.y) || blocked(Direction::East, p.x, p.y + 1) {
+            p.x -= 1;
+        }
+        if p.x % 2 != 0 {
+            exhaust.push((p.x - 1, p.y + 1, crate::effects::DIR8_WEST));
+        }
+    }
+
+    let up = input.look_up || forced_up;
+    if up && !input.look_down {
+        if p.y > 4 {
+            p.y -= 1;
+        }
+        if blocked(Direction::North, p.x, p.y) {
+            p.y += 1;
+        }
+        if p.y % 2 != 0 {
+            exhaust.push((p.x + 1, p.y + 1, crate::effects::DIR8_SOUTH));
+        }
+    } else if input.look_down && !up {
+        // The floor of the map, not of the level - a scooter can fly below
+        // the terrain's own floor but not off the map.
+        if crate::camera::max_scroll_y(level.width) + 17 > p.y {
+            p.y += 1;
+        }
+        if blocked(Direction::South, p.x, p.y + 1) {
+            p.y -= 1;
+        }
+    }
+
+    // The view follows, as it does for a platform ride.
+    if p.y - scroll.y > crate::camera::SCROLL_H - 4 {
+        scroll.y += 1;
+    } else if p.y - scroll.y < 7 && scroll.y > 0 {
+        scroll.y -= 1;
+    }
+    if p.x - scroll.x > crate::camera::SCROLL_W - 15
+        && map_width - crate::camera::SCROLL_W > scroll.x
+    {
+        scroll.x += 1;
+    } else if p.x - scroll.x < 12 && scroll.x > 0 {
+        scroll.x -= 1;
+    }
+    exhaust
+}
+
 pub fn move_player_tick(
     mut query: Query<&mut Player>,
     input: Res<PlayerInput>,
@@ -595,6 +730,7 @@ pub fn move_player_tick(
     data: Res<GameData>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut sfx: EventWriter<PlaySfx>,
+    mut exhaust: EventWriter<ScooterExhaust>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -616,6 +752,22 @@ pub fn move_player_tick(
     // `blockActionCmds` and the dizzy shake both stop the whole tick, not
     // just movement (game1.c:8452-8454).
     if p.dizzy_left != 0 || p.block_action {
+        return;
+    }
+
+    // On a scooter the walking model is replaced entirely.
+    if p.scooter != 0 {
+        let puffs = move_player_scooter(
+            &mut p,
+            &mut scroll,
+            level,
+            &data,
+            &input,
+            level.width as i32,
+        );
+        for (x, y, dir) in puffs {
+            exhaust.write(ScooterExhaust { x, y, dir });
+        }
         return;
     }
 
@@ -1087,6 +1239,7 @@ pub fn update_frame_and_scroll(
     mut scroll: ResMut<crate::camera::Scroll>,
     near_globe: Res<crate::hints::NearHintGlobe>,
     mut sfx: EventWriter<PlaySfx>,
+    mut exhaust: EventWriter<ScooterExhaust>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -1271,6 +1424,103 @@ pub fn apply_player_frame(mut query: Query<(&Player, &mut Sprite)>, frames: Res<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flat_world() -> (crate::data::LevelJson, GameData) {
+        // Open air with a floor, so a scooter can fly.
+        let rows = ["................"; 8];
+        let width = rows[0].len();
+        let mut tiles = Vec::new();
+        for _ in rows {
+            tiles.extend(std::iter::repeat_n(0u16, width));
+        }
+        let level = crate::data::LevelJson {
+            name: "t".into(),
+            width,
+            height: rows.len(),
+            tiles,
+            actors: Vec::new(),
+            backdrop: None,
+            music: None,
+            has_h_scroll_backdrop: false,
+            has_v_scroll_backdrop: false,
+        };
+        let data = GameData {
+            root: std::path::PathBuf::new(),
+            asset_prefix: String::new(),
+            episode: 1,
+            tileset: crate::data::TilesetJson {
+                tile_size: 8,
+                atlas_cols: 1,
+                solid_tile_count: 1,
+                masked_tile_count: 0,
+            },
+            tile_attrs: vec![0u8; 16],
+        };
+        (level, data)
+    }
+
+    #[test]
+    fn a_scooter_lifts_off_before_it_takes_orders() {
+        // Mounting sets 4, and the first three ticks force it upward
+        // whatever the player asks for (game1.c:8895).
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 4;
+        let start = p.y;
+        let idle = PlayerInput::default();
+        for _ in 0..3 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &idle, 16);
+        }
+        assert!(p.y < start, "it should have climbed without being asked");
+        assert_eq!(p.scooter, 1, "and settled into free flight");
+    }
+
+    #[test]
+    fn a_scooter_flies_where_it_is_steered() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let (x0, y0) = (p.x, p.y);
+
+        let east = PlayerInput { east: true, ..default() };
+        for _ in 0..4 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &east, 16);
+        }
+        assert!(p.x > x0, "east should move it east");
+
+        let down = PlayerInput { look_down: true, ..default() };
+        for _ in 0..3 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &down, 16);
+        }
+        assert!(p.y > y0, "and down should move it down - no gravity here");
+    }
+
+    #[test]
+    fn jumping_steps_off_the_scooter() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let jump = PlayerInput { jump: true, ..default() };
+        move_player_scooter(&mut p, &mut scroll, &level, &data, &jump, 16);
+        assert_eq!(p.scooter, 0, "dismounted");
+        assert!(p.is_falling, "and falling again");
+    }
+
+    #[test]
+    fn a_scooter_puffs_as_it_travels() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let east = PlayerInput { east: true, ..default() };
+        let puffs: usize = (0..8)
+            .map(|_| move_player_scooter(&mut p, &mut scroll, &level, &data, &east, 16).len())
+            .sum();
+        assert!(puffs > 0, "it should leave exhaust behind it");
+    }
 
     #[test]
     fn a_queued_head_shake_waits_for_the_ground() {
