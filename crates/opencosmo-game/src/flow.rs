@@ -183,9 +183,7 @@ pub fn restart_level(
     mut stars: ResMut<Stars>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
-    mut tile_index: ResMut<level::TileIndex>,
-    mut switches: ResMut<crate::enemy_ai::SwitchState>,
-    mut images: ResMut<Assets<Image>>,
+    mut load: LevelLoad,
 ) {
     if events.read().next().is_none() {
         return;
@@ -198,7 +196,7 @@ pub fn restart_level(
     }
     let name = current.name.clone();
     if let Some(reloaded) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &mut images, &name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut load, &name)
     {
         *current = reloaded;
     }
@@ -314,6 +312,17 @@ impl Intermission {
     }
 }
 
+/// The resources a level load writes into. Bundled because the signature
+/// had grown past Bevy's sixteen-parameter limit, and because these always
+/// travel together anyway.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct LevelLoad<'w> {
+    pub tile_index: ResMut<'w, level::TileIndex>,
+    pub switches: ResMut<'w, crate::enemy_ai::SwitchState>,
+    pub music: ResMut<'w, crate::audio::MusicOverride>,
+    pub images: ResMut<'w, Assets<Image>>,
+}
+
 /// Spawns everything for `stem`, replacing whatever level was previously
 /// loaded (caller is responsible for despawning `LevelScoped` entities
 /// first). Shared by initial Startup load and mid-game transitions.
@@ -322,20 +331,20 @@ pub fn load_level_into_world(
     asset_server: &AssetServer,
     data: &GameData,
     tileset: &TilesetAssets,
-    tile_index: &mut level::TileIndex,
-    switches: &mut crate::enemy_ai::SwitchState,
-    images: &mut Assets<Image>,
+    load: &mut LevelLoad,
     stem: &str,
 ) -> Option<CurrentLevel> {
     let mut level = data.load_level(stem)?;
-    switches.reset_for_level(&level);
+    load.switches.reset_for_level(&level);
+    // The boss's track does not follow the player out of the fight.
+    load.music.0 = None;
     // Pedestal caps are solid floor; stamped in before anything reads the
     // map so collision and rendering agree.
     actors::apply_pedestal_platforms(&mut level);
     let bounds = level::content_bounds(&level);
     level::spawn_backdrop(commands, asset_server, &level, bounds);
-    level::spawn_level_tiles(commands, tileset, &level, data, tile_index);
-    level::spawn_level_lights(commands, images, &level, data);
+    level::spawn_level_tiles(commands, tileset, &level, data, &mut load.tile_index);
+    level::spawn_level_lights(commands, &mut load.images, &level, data);
     level::spawn_level_platforms(commands, &level);
     level::spawn_level_fountains(commands, &level);
     actors::spawn_level_actors(commands, asset_server, &level, data);
@@ -634,9 +643,7 @@ pub fn enter_level(
     mut player_q: Query<&mut Player>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut saw_auto: ResMut<crate::hints::SawAutoHintGlobe>,
-    mut tile_index: ResMut<level::TileIndex>,
-    mut switches: ResMut<crate::enemy_ai::SwitchState>,
-    mut images: ResMut<Assets<Image>>,
+    mut load: LevelLoad,
 ) {
     let Some(EnterLevel { level: next_name }) = events.read().last() else {
         return;
@@ -650,7 +657,7 @@ pub fn enter_level(
     }
 
     let Some(new_current) =
-        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut tile_index, &mut switches, &mut images, next_name)
+        load_level_into_world(&mut commands, &asset_server, &data, &tileset, &mut load, next_name)
     else {
         return;
     };

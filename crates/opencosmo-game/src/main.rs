@@ -190,6 +190,7 @@ fn main() {
         .insert_resource(motion::MotionOverride::from_env())
         .init_resource::<help::Paused>()
         .init_resource::<audio::AudioMode>()
+        .init_resource::<audio::MusicOverride>()
         .init_resource::<camera::Scroll>()
         .init_resource::<motion::PrevScroll>()
         .init_resource::<hints::NearHintGlobe>()
@@ -447,29 +448,40 @@ fn main() {
         // `update_death`'s restart request still arrives.
         .add_systems(
             Update,
+            // Split in two and each half chained, then the halves chained
+            // against each other: a flat tuple would be 21 elements, past
+            // Bevy's limit, and `.chain()` on an outer tuple of two plain
+            // tuples would order only the halves - the trap this file
+            // already warns about for the gameplay tick.
             (
-                demo::demo_hotkeys,
-                cheats::cheat_input,
-                cheats::close_cheat_message,
-                help::help_menu_input,
-                savegame::open_slot_prompt,
-                savegame::slot_prompt_input,
-                savegame::apply_restored_game,
-                devmenu::open_level_warp,
-                devmenu::level_warp_input,
-                hints::show_hint,
-                hints::drain_queued_hint,
-                hints::close_hint,
-                flow::show_intermission,
-                flow::close_intermission,
-                flow::restart_level,
-                flow::enter_level,
-                // After enter_level, so the intro is raised for the level
-                // that was just loaded rather than the one being left.
-                flow::show_cliffhanger,
-                flow::close_cliffhanger,
-                flow::show_level_intro,
-                flow::close_level_intro,
+                (
+                    demo::demo_hotkeys,
+                    cheats::cheat_input,
+                    cheats::close_cheat_message,
+                    help::help_menu_input,
+                    savegame::open_slot_prompt,
+                    savegame::slot_prompt_input,
+                    savegame::apply_restored_game,
+                    devmenu::open_level_warp,
+                    devmenu::level_warp_input,
+                    hints::show_hint,
+                )
+                    .chain(),
+                (
+                    hints::drain_queued_hint,
+                    hints::close_hint,
+                    flow::show_intermission,
+                    flow::close_intermission,
+                    flow::restart_level,
+                    flow::enter_level,
+                    // After enter_level, so the intro is raised for the
+                    // level just loaded rather than the one being left.
+                    flow::show_cliffhanger,
+                    flow::close_cliffhanger,
+                    flow::show_level_intro,
+                    flow::close_level_intro,
+                )
+                    .chain(),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -551,10 +563,8 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
-    mut images: ResMut<Assets<Image>>,
-    mut switches: ResMut<enemy_ai::SwitchState>,
-    mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
+    mut load: flow::LevelLoad,
 ) {
     // Each episode names its levels differently, so the default start
     // comes from that episode's own progression rather than a literal.
@@ -570,9 +580,7 @@ fn setup_game(
         &asset_server,
         &data,
         &tileset_assets,
-        &mut tile_index,
-        &mut switches,
-        &mut images,
+        &mut load,
         &start_level,
     )
     .expect("start level missing from generated assets");

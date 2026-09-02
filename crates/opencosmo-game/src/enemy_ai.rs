@@ -681,6 +681,8 @@ pub struct Enemy {
     pub carry_player: bool,
     /// Score pop-ups to raise, as (x, y).
     pub score_effects: Vec<(i32, i32)>,
+    /// A track to play instead of the level's own, while this actor lives.
+    pub music: Option<&'static str>,
 }
 
 impl Enemy {
@@ -772,6 +774,7 @@ impl Enemy {
             explosions: Vec::new(),
             carry_player: false,
             score_effects: Vec::new(),
+            music: None,
         }
     }
 
@@ -818,6 +821,7 @@ impl Enemy {
             explosions: Vec::new(),
             carry_player: false,
             score_effects: Vec::new(),
+            music: None,
         }
     }
 
@@ -2837,9 +2841,14 @@ fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// ported, so only the death timer is kept - held in `fall_time`, which
 /// leaves the collision flags meaning what they say.
 ///
-/// NOT PORTED: the boss music, and the parachute balls the harder build
-/// throws. The damage sound is raised by `pounce_boss` rather than here.
+/// NOT PORTED: the parachute balls the harder build throws. The damage
+/// sound is raised by `pounce_boss` rather than here.
 fn tick_boss(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) -> bool {
+    if e.d4 == 0 && e.d1 == 0 {
+        // First tick: the fight has its own music (game1.c:3626).
+        e.music = Some(crate::audio::MUSIC_BOSS);
+        e.bubble = Some(ACT_SPEECH_WHOA);
+    }
     /// game1.c:5590 - the bob, as per-tick row offsets.
     const Y_JUMP: [i32; 14] = [2, 2, 1, 0, -1, -2, -2, -2, -2, -1, 0, 1, 2, 2];
 
@@ -3293,6 +3302,7 @@ pub fn spawn_queued_actors(
     mut xmode: ResMut<crate::effects::ShardXMode>,
     mut score: ResMut<crate::flow::Score>,
     mut seen: ResMut<SeenBubbles>,
+    mut music: ResMut<crate::audio::MusicOverride>,
     tileset: Option<Res<crate::tileset::TilesetAssets>>,
     mut tile_index: ResMut<crate::level::TileIndex>,
     mut current: ResMut<CurrentLevel>,
@@ -3334,6 +3344,9 @@ pub fn spawn_queued_actors(
         }
         if !e.score_effects.is_empty() {
             score_effects.append(&mut e.score_effects);
+        }
+        if let Some(track) = e.music.take() {
+            music.0 = Some(track);
         }
         if e.carry_player {
             e.carry_player = false;
