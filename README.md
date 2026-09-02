@@ -112,9 +112,9 @@ score table, saving and restoring to nine slots in the original's own file
 format, demo recording and playback, the cheat code, the contextual hints, and
 an episode chooser.
 
-**Missing:** riding the rocket and the scooter, both of which need vehicle
-state that does not exist yet, and assorted decorative touches. Each is marked
-with a `NOT PORTED:` line in the relevant doc comment.
+**Missing:** assorted decorative touches — a few draw modes, some of the
+original's screen fades, and the sideways bomb drop while riding a scooter.
+Each is marked with a `NOT PORTED:` line in the relevant doc comment.
 
 There's no lives or game-over system because the original has none — dying
 costs you the level's progress, not a life.
