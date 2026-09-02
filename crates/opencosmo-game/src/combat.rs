@@ -61,6 +61,7 @@ pub fn pounce_enemies(
     mut commands: Commands,
     effects: Res<EffectAssets>,
     mut score: ResMut<Score>,
+    mut seen: ResMut<crate::hints::SeenHints>,
     mut player_q: Query<&mut Player>,
     mut enemies: Query<(Entity, &mut Enemy)>,
     mut sfx: EventWriter<PlaySfx>,
@@ -90,11 +91,16 @@ pub fn pounce_enemies(
         ) {
             continue;
         }
+        // `isPounceReady` (game1.c:7077-7090): set by the alignment test
+        // itself, and read by `TryPounce` to tell a real landing from a
+        // glancing overlap.
+        player.pounce_ready = true;
         if !player.try_pounce(enemy.pounce_recoil) {
             continue;
         }
 
         sfx.write(PlaySfx(snd::PLAYER_POUNCE));
+        seen.on_pounce();
 
         // Tougher actors soak several pounces before dying, each one still
         // bouncing the player (game1.c:7160-7175, 7247-7260).
@@ -204,6 +210,8 @@ pub fn place_bomb(
     effects: Res<EffectAssets>,
     input: Res<PlayerInput>,
     mut sfx: EventWriter<PlaySfx>,
+    mut seen: ResMut<crate::hints::SeenHints>,
+    mut hints: EventWriter<crate::hints::ShowHint>,
     mut latch: Local<bool>,
     mut player_q: Query<&mut Player>,
 ) {
@@ -221,6 +229,10 @@ pub fn place_bomb(
     if player.bombs == 0 {
         *latch = true;
         sfx.write(PlaySfx(snd::NO_BOMBS));
+        // ...and the first time, explains why (game1.c:8513).
+        if let Some(hint) = seen.on_bomb_refused() {
+            hints.write(crate::hints::ShowHint(hint));
+        }
         return;
     }
     *latch = true;
@@ -326,7 +338,13 @@ pub fn explosion_damage(
             // instance, can only be killed this way (it appears in the
             // shard/destruction switch at game1.c:6955-7010 but never
             // calls TryPounce). Floating collectibles are the exception.
-            if enemy.dead || enemy.kind == EnemyKind::Prize {
+            // Prizes and inert furniture are not creatures. A barrel is
+            // destroyed by `blast_containers`, which knows to release what
+            // is inside it; killing it here would swallow the contents.
+            if enemy.dead
+                || enemy.kind == EnemyKind::Prize
+                || enemy.kind == EnemyKind::Inert
+            {
                 continue;
             }
             if rects_overlap(
@@ -351,14 +369,31 @@ pub fn explosion_damage(
                 }
                 // A monument takes two blasts and pays out the largest
                 // single score in the game (game1.c:5361).
+                // A pyramid takes three ticks to go off, and a beam robot
+                // leaves a column of explosions up its own beam - both
+                // need their tick to run once more rather than being
+                // despawned here.
+                if enemy.kind == EnemyKind::Pyramid && enemy.d2 == 0 {
+                    enemy.d2 = 3;
+                    continue;
+                }
+                if enemy.kind == EnemyKind::BeamRobot && enemy.d3 == 0 {
+                    // d2 holds the beam length it was casting.
+                    enemy.d3 = enemy.d2.max(1);
+                    continue;
+                }
                 if enemy.kind == EnemyKind::FrozenDN {
                     crate::enemy_ai::smash_frozen_dn(&mut enemy);
                     continue;
                 }
                 if enemy.kind == EnemyKind::Monument {
-                    if crate::enemy_ai::blast_monument(&mut enemy) {
-                        score.0 += 25600;
-                    }
+                    // The award is raised by the monument's own tick now,
+                    // alongside its score pop-ups.
+                    crate::enemy_ai::blast_monument(&mut enemy);
+                    continue;
+                }
+                if enemy.kind == EnemyKind::TulipLauncher {
+                    crate::enemy_ai::blast_tulip_launcher(&mut enemy);
                     continue;
                 }
                 if enemy.kind == EnemyKind::Satellite {
@@ -486,6 +521,9 @@ mod tests {
     #[test]
     fn pounce_requires_descending() {
         let mut player = Player::spawn_at(0, 0);
+        // The alignment pass arms this before TryPounce is consulted
+        // (game1.c:7077-7090).
+        player.pounce_ready = true;
         player.is_falling = false;
         player.jump_time = 0;
         assert!(!player.try_pounce(7), "grounded player cannot pounce");
@@ -499,9 +537,38 @@ mod tests {
     #[test]
     fn pounce_does_not_retrigger_mid_bounce() {
         let mut player = Player::spawn_at(0, 0);
+        player.pounce_ready = true;
         player.is_falling = true;
         assert!(player.try_pounce(7));
         // Still early in the bounce, so a second hit is refused.
         assert!(!player.try_pounce(7));
+    }
+
+    #[test]
+    fn a_pounce_leaves_falling_set_but_gates_gravity_off() {
+        // The original's TryPounce does not touch isPlayerFalling
+        // (game1.c:6857); the recoil flag is what stops gravity, and the
+        // movement tick tests `is_falling && !is_recoiling`. Clearing
+        // falling here instead - which this used to do - broke stepping
+        // off a scooter, which sets falling and then calls this for its
+        // side effects.
+        let mut player = Player::spawn_at(0, 0);
+        player.pounce_ready = true;
+        player.is_falling = true;
+        assert!(player.try_pounce(7));
+        assert!(player.is_falling, "still falling as far as the flag goes");
+        assert!(player.is_recoiling, "but recoil owns the vertical motion");
+        assert!(player.recoil_left > 0);
+    }
+
+    #[test]
+    fn an_unaligned_pounce_is_refused_however_fast_the_fall() {
+        // `isPounceReady` is what separates landing on something from
+        // merely overlapping it while falling past (game1.c:6855).
+        let mut player = Player::spawn_at(0, 0);
+        player.is_falling = true;
+        player.fall_time = 20;
+        assert!(!player.pounce_ready);
+        assert!(!player.try_pounce(7), "falling past is not a pounce");
     }
 }

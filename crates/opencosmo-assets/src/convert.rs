@@ -43,6 +43,36 @@ pub const FONT_ATLAS_COLS: u32 = 10;
 pub const EFFECT_SPRITES: &[u16] = &[
     15, 21, 23, 24, 26, 97, 98, 177, 178, 179, 180, 181, 182, 183, 184,
 ];
+
+/// Sprites for actors that exist only at runtime.
+///
+/// The scan above only sees what a *level places*, which is the right rule
+/// for scenery but silently wrong for anything spawned mid-play: a turret's
+/// projectile appears in no map, so its sprite was never converted, so the
+/// turret fired nothing. The failure is quiet - `spawn_one_actor` cannot
+/// load a manifest and returns - which is why it survived being "ported".
+///
+/// Anything added to `Enemy::spawns` needs its sprite here unless a level
+/// also places one.
+pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
+    68, // SPR_PROJECTILE - fired by the turret and the wall plants
+    82, // SPR_HAMBURGER - dropped by a destroyed satellite
+    65, // SPR_BABY_GHOST - hatched from an egg; placed only in episodes 2-3
+    79, // SPR_FOUNTAIN - placed as SPA_FOUNTAIN_*, which is a special
+        // actor (map_type < 31) and so never seen by the ACT_* scan above
+    131, // SPR_WORM_CRATE_SHARDS - debris, never placed
+    144, // SPR_SATELLITE_SHARDS - debris, never placed
+    // The speech bubbles, raised by NewActor the first time the player
+    // meets certain things and never placed by a map.
+    235, // SPR_SPEECH_OUCH
+    244, // SPR_SPEECH_WHOA
+    245, // SPR_SPEECH_UMPH
+    246, // SPR_SPEECH_WOW_50K
+    19,  // SPR_SCOOTER_EXHAUST - emitted only while riding one
+    // SPR_BGHOST_EGG_SHARD_1.._4 - shell, never placed. Note these are
+    // *not* consecutive (sprite.h:98-99, 154-155).
+    76, 77, 132, 133,
+];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;
 const MUSIC_SAMPLE_RATE: u32 = 44100;
@@ -466,6 +496,7 @@ pub fn convert_episode(sh_path: &Path, out_dir: &Path, episode: u8) -> Result<Ve
         }
     }
     used_sprites.extend_from_slice(EFFECT_SPRITES);
+    used_sprites.extend_from_slice(RUNTIME_SPAWNED_SPRITES);
     used_sprites.sort_unstable();
     used_sprites.dedup();
     used_sprites.retain(|&t| (t as usize) < actrinfo.len() && (t as usize) < MAX_ACTOR_TYPES);

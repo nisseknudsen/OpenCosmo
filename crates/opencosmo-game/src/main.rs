@@ -1,15 +1,18 @@
 mod actors;
 mod audio;
 mod camera;
+mod cheats;
 mod combat;
 mod controls_screen;
 mod data;
+mod demo;
 mod devmenu;
 mod effects;
 mod enemy;
 mod enemy_ai;
 mod flow;
 mod help;
+mod highscores;
 mod hints;
 mod hud;
 mod input;
@@ -19,8 +22,10 @@ mod panel;
 mod pickups;
 mod player;
 mod presentation;
+mod savegame;
 mod screen;
 mod sfx;
+mod textpages;
 mod tileset;
 mod trace;
 
@@ -168,6 +173,9 @@ fn main() {
             Ok("menu") => GameState::Menu,
             Ok("credits") => GameState::Credits,
             Ok("controls") => GameState::Controls,
+            Ok("episodes") => GameState::Episodes,
+            Ok("story") => GameState::TextPages,
+            Ok("scores") => GameState::HighScores,
             Ok("playing") => GameState::Playing,
             _ => GameState::Title,
         })
@@ -182,6 +190,7 @@ fn main() {
         .insert_resource(motion::MotionOverride::from_env())
         .init_resource::<help::Paused>()
         .init_resource::<audio::AudioMode>()
+        .init_resource::<audio::MusicOverride>()
         .init_resource::<camera::Scroll>()
         .init_resource::<motion::PrevScroll>()
         .init_resource::<hints::NearHintGlobe>()
@@ -190,6 +199,23 @@ fn main() {
         .init_resource::<level::TileIndex>()
         .init_resource::<enemy_ai::SwitchState>()
         .init_resource::<enemy_ai::TransporterState>()
+        .init_resource::<flow::LevelIntroTimer>()
+        .init_resource::<effects::ShardXMode>()
+        .init_resource::<enemy_ai::SeenBubbles>()
+        .init_resource::<hints::SeenHints>()
+        .init_resource::<data::ChosenEpisode>()
+        .init_resource::<screen::TextPages>()
+        .insert_resource(highscores::HighScores::load())
+        .init_resource::<highscores::TableMode>()
+        .init_resource::<highscores::PendingEntry>()
+        .init_resource::<savegame::SlotPrompt>()
+        .init_resource::<cheats::CheatState>()
+        .init_resource::<demo::Demo>()
+        .add_event::<savegame::OpenSlotPrompt>()
+        .add_event::<savegame::RestoredGame>()
+        .add_event::<flow::ShowCliffhanger>()
+        .add_event::<player::ScooterExhaust>()
+        .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
         .add_event::<flow::EnterLevel>()
@@ -221,7 +247,35 @@ fn main() {
             ),
         )
         // --- Gameplay ---
-        .add_systems(OnEnter(GameState::Playing), setup_game)
+        // Leaving a game is where the original checks the score.
+        .add_systems(OnExit(GameState::Playing), highscores::check_high_score)
+        .add_systems(
+            Update,
+            highscores::name_entry_input.run_if(in_state(GameState::Menu)),
+        )
+        .add_systems(OnEnter(GameState::HighScores), highscores::spawn_high_scores)
+        .add_systems(OnExit(GameState::HighScores), highscores::despawn_high_scores)
+        .add_systems(
+            Update,
+            highscores::high_scores_input.run_if(in_state(GameState::HighScores)),
+        )
+        .add_systems(OnEnter(GameState::TextPages), screen::spawn_text_page)
+        .add_systems(OnExit(GameState::TextPages), screen::despawn_text_pages)
+        .add_systems(
+            Update,
+            screen::text_page_input.run_if(in_state(GameState::TextPages)),
+        )
+        .add_systems(OnEnter(GameState::Episodes), screen::spawn_episodes)
+        .add_systems(OnExit(GameState::Episodes), screen::despawn_episodes)
+        .add_systems(
+            Update,
+            screen::episodes_input.run_if(in_state(GameState::Episodes)),
+        )
+        // Before setup_game, so the level it loads is the chosen episode's.
+        .add_systems(
+            OnEnter(GameState::Playing),
+            (apply_chosen_episode, setup_game, demo::autostart_demo).chain(),
+        )
         .add_systems(
             OnExit(GameState::Playing),
             (
@@ -247,6 +301,17 @@ fn main() {
                 .after(player::read_input)
                 .run_if(in_state(GameState::Playing).and(help::not_paused)),
         )
+        .add_systems(
+            FixedUpdate,
+            // After `read_input` and before the tick sets: a replayed
+            // frame has to *replace* what the keyboard produced, and
+            // ordering it only before the snapshot let `read_input`
+            // overwrite it every tick.
+            demo::drive_demo
+                .after(player::read_input)
+                .before(Tick::Snapshot)
+                .run_if(in_state(GameState::Playing)),
+        )
         .add_systems(FixedUpdate, motion::snapshot_positions.in_set(Tick::Snapshot))
         .add_systems(
             FixedUpdate,
@@ -266,6 +331,13 @@ fn main() {
                 // measures them.
                 enemy_ai::draw_force_field_beams,
                 enemy_ai::run_transporters,
+                enemy_ai::run_pipes,
+                enemy_ai::mount_scooter,
+                effects::spawn_scooter_exhaust,
+                level::move_platforms,
+                level::move_fountains,
+                level::draw_fountains,
+                level::apply_light_switch,
                 enemy_ai::finish_on_boss_defeat,
             )
                 .chain()
@@ -293,6 +365,7 @@ fn main() {
                 combat::explosion_bursts_containers,
                 actors::collapse_pedestals,
                 effects::tick_decorations,
+                effects::tick_shards,
                 effects::tick_score_effects,
             )
                 .chain()
@@ -345,6 +418,7 @@ fn main() {
             (
                 player::apply_player_frame,
                 player::sync_transform,
+                player::sync_player_visibility,
                 actors::animate_sprites,
                 actors::track_player,
                 camera::apply_scroll,
@@ -374,15 +448,40 @@ fn main() {
         // `update_death`'s restart request still arrives.
         .add_systems(
             Update,
+            // Split in two and each half chained, then the halves chained
+            // against each other: a flat tuple would be 21 elements, past
+            // Bevy's limit, and `.chain()` on an outer tuple of two plain
+            // tuples would order only the halves - the trap this file
+            // already warns about for the gameplay tick.
             (
-                help::help_menu_input,
-                devmenu::open_level_warp,
-                devmenu::level_warp_input,
-                hints::close_hint,
-                flow::show_intermission,
-                flow::close_intermission,
-                flow::restart_level,
-                flow::enter_level,
+                (
+                    demo::demo_hotkeys,
+                    cheats::cheat_input,
+                    cheats::close_cheat_message,
+                    help::help_menu_input,
+                    savegame::open_slot_prompt,
+                    savegame::slot_prompt_input,
+                    savegame::apply_restored_game,
+                    devmenu::open_level_warp,
+                    devmenu::level_warp_input,
+                    hints::show_hint,
+                )
+                    .chain(),
+                (
+                    hints::drain_queued_hint,
+                    hints::close_hint,
+                    flow::show_intermission,
+                    flow::close_intermission,
+                    flow::restart_level,
+                    flow::enter_level,
+                    // After enter_level, so the intro is raised for the
+                    // level just loaded rather than the one being left.
+                    flow::show_cliffhanger,
+                    flow::close_cliffhanger,
+                    flow::show_level_intro,
+                    flow::close_level_intro,
+                )
+                    .chain(),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -429,6 +528,32 @@ fn insert_core_resources(app: &mut App) {
 }
 
 /// Everything that only exists while a level is being played.
+/// Applies an episode picked from the menu by rebuilding `GameData` and
+/// the assets keyed off it. Runs on the way into a game, which is the only
+/// point where nothing is holding a handle into the old episode.
+fn apply_chosen_episode(
+    mut chosen: ResMut<data::ChosenEpisode>,
+    mut data: ResMut<GameData>,
+) {
+    let Some(episode) = chosen.0.take() else {
+        return;
+    };
+    if episode == data.episode {
+        return;
+    }
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    // Only `GameData` is swapped here. Everything keyed off it - the level
+    // progression, the effect and sound assets, the tileset - is rebuilt
+    // by `setup_game`, which runs next in the same chain and reads this.
+    //
+    // Assigned rather than inserted through `Commands` for that reason: a
+    // deferred insert would hand `setup_game` the episode being left. And
+    // it must not touch the asset resources, which do not exist yet on the
+    // first entry into a game - `setup_game` is what creates them.
+    *data = GameData::load_episode(&assets_dir, episode);
+    info!("switched to episode {episode}");
+}
+
 fn setup_game(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -438,9 +563,8 @@ fn setup_game(
     ui_camera: Res<UiCamera>,
     mut scroll: ResMut<camera::Scroll>,
     mut saw_auto: ResMut<hints::SawAutoHintGlobe>,
-    mut switches: ResMut<enemy_ai::SwitchState>,
-    mut tile_index: ResMut<level::TileIndex>,
     screen: Res<presentation::VirtualScreen>,
+    mut load: flow::LevelLoad,
 ) {
     // Each episode names its levels differently, so the default start
     // comes from that episode's own progression rather than a literal.
@@ -456,8 +580,7 @@ fn setup_game(
         &asset_server,
         &data,
         &tileset_assets,
-        &mut tile_index,
-        &mut switches,
+        &mut load,
         &start_level,
     )
     .expect("start level missing from generated assets");

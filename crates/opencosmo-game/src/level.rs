@@ -353,3 +353,650 @@ pub fn find_player_start(level: &LevelJson) -> (f32, f32) {
         .map(|a| (a.x as f32, a.y as f32))
         .unwrap_or((2.0, 2.0))
 }
+
+/// Builds every light in the level: the cone's own cell with its ramp,
+/// then straight down until a floor stops it or the cast distance runs out
+/// (game1.c:1745-1755).
+pub fn spawn_level_lights(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    level: &LevelJson,
+    data: &GameData,
+) {
+    let reach = light_cast_distance(data.episode);
+    // One image per shape, shared by every cone that uses it.
+    let handles: Vec<Handle<Image>> = [LightSide::West, LightSide::Middle, LightSide::East]
+        .into_iter()
+        .map(|s| images.add(s.image()))
+        .collect();
+    let full = handles[1].clone();
+
+    for a in &level.actors {
+        let side = match a.map_type {
+            6 => LightSide::West,
+            7 => LightSide::Middle,
+            8 => LightSide::East,
+            _ => continue,
+        };
+        let (x, y) = (a.x as i32, a.y as i32);
+        let mut cell = |image: Handle<Image>, x: i32, y: i32| {
+            commands.spawn((
+                Sprite { image, ..default() },
+                Transform::from_translation(
+                    tile_topleft_to_center(x as f32, y as f32, TILE_PX, TILE_PX).extend(LIGHT_Z),
+                ),
+                LightCone { x, y, side },
+                LevelScoped,
+            ));
+        };
+        cell(handles[side as usize].clone(), x, y);
+
+        // The cone below is always full-width; only the source cell is
+        // ramped.
+        for row in (y + 1)..(y + reach) {
+            if row < 0 || row as usize >= level.height {
+                break;
+            }
+            if data.tile_attr(level.tile_at(x.max(0) as usize, row as usize))
+                & crate::data::TILE_ATTR_BLOCK_SOUTH
+                != 0
+            {
+                break;
+            }
+            cell(full.clone(), x, row);
+        }
+    }
+}
+
+/// Above the foreground tiles: a light falls on what is drawn, including
+/// the layer that covers the player.
+const LIGHT_Z: f32 = 13.0;
+
+/// Hides every cone while the lights are switched off (game1.c:1721).
+pub fn apply_light_switch(
+    switches: Res<crate::enemy_ai::SwitchState>,
+    mut cones: Query<&mut Visibility, With<LightCone>>,
+) {
+    let want = if switches.lights_active {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut vis in &mut cones {
+        vis.set_if_neq(want);
+    }
+}
+
+/// A light cone cast by `SPA_LIGHT_*` (map_type 6-8).
+///
+/// The original does not draw a sprite for these: `LightenScreenTile`
+/// (lowlevel.asm:704) sets the EGA intensity bit on plane 3 of the tile
+/// already on screen, brightening whatever is behind it. The two edge
+/// variants ramp that in over eight rows, which is what gives a cone its
+/// sloped sides (lowlevel.asm:626, and the mirrored east version).
+///
+/// Reproduced here by compositing white additively rather than by
+/// remapping each colour to its high-intensity twin. On the EGA palette
+/// those are close - every colour's bright form is the same hue lit - but
+/// it is an approximation, not the hardware operation.
+#[derive(Component)]
+pub struct LightCone {
+    pub x: i32,
+    pub y: i32,
+    pub side: LightSide,
+}
+
+/// `LIGHT_SIDE_*` (def.h:107-109).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LightSide {
+    West = 0,
+    Middle = 1,
+    East = 2,
+}
+
+impl LightSide {
+    /// The eight row masks the assembly writes into the EGA bit mask
+    /// register, as leftmost-pixel-first booleans.
+    fn row_mask(self, row: usize) -> [bool; 8] {
+        let mut out = [false; 8];
+        match self {
+            // Full brightness everywhere.
+            LightSide::Middle => out = [true; 8],
+            // 00000001b .. 11111111b - fills in from the east edge, so the
+            // cone's west boundary slopes away downward.
+            LightSide::West => {
+                for i in 0..=row {
+                    out[7 - i] = true;
+                }
+            }
+            // 10000000b .. 11111111b - the mirror.
+            LightSide::East => {
+                for i in 0..=row {
+                    out[i] = true;
+                }
+            }
+        }
+        out
+    }
+
+    /// An 8x8 RGBA image of the ramp, white where the mask is set.
+    fn image(self) -> Image {
+        let mut px = vec![0u8; 8 * 8 * 4];
+        for row in 0..8 {
+            let mask = self.row_mask(row);
+            for (col, lit) in mask.iter().enumerate() {
+                if *lit {
+                    let i = (row * 8 + col) * 4;
+                    px[i] = 255;
+                    px[i + 1] = 255;
+                    px[i + 2] = 255;
+                    px[i + 3] = LIGHT_ALPHA;
+                }
+            }
+        }
+        Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            px,
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+}
+
+/// How strongly a lit cell is brightened. The hardware sets one palette
+/// bit, which is a large jump; this is tuned to read as a light cone
+/// without washing out the artwork underneath.
+const LIGHT_ALPHA: u8 = 56;
+
+/// `LIGHT_CAST_DISTANCE` (episode1.h:20, episode2.h:20, episode3.h:20).
+/// Episode 1 casts eleven rows, the later two thirteen.
+pub fn light_cast_distance(episode: u8) -> i32 {
+    if episode == 1 {
+        11
+    } else {
+        13
+    }
+}
+
+#[cfg(test)]
+mod light_tests {
+    use super::*;
+
+    /// Drives a fountain the way `move_fountains` does, without the Bevy
+    /// plumbing, so the cycle can be asserted.
+    fn step_fountain(f: &mut Fountain) {
+        if f.delay != 0 {
+            f.delay -= 1;
+            return;
+        }
+        f.step += 1;
+        if f.step == f.step_max {
+            f.step = 0;
+            f.north = !f.north;
+            f.delay = 10;
+            return;
+        }
+        if f.north {
+            f.y -= 1;
+            f.height += 1;
+        } else {
+            f.y += 1;
+            f.height -= 1;
+        }
+    }
+
+    fn fountain(map_type: i32) -> Fountain {
+        Fountain {
+            x: 10,
+            y: 20,
+            north: true,
+            step: 0,
+            step_max: map_type * 3,
+            height: 0,
+            delay: 0,
+        }
+    }
+
+    #[test]
+    fn a_fountain_returns_to_where_it_started() {
+        // It must be a closed cycle or the jet would walk up the level.
+        for map_type in 2..=5 {
+            let mut f = fountain(map_type);
+            let (y0, h0) = (f.y, f.height);
+            // Two full travels plus both pauses.
+            for _ in 0..((f.step_max + 10) * 2) {
+                step_fountain(&mut f);
+            }
+            assert_eq!((f.y, f.height), (y0, h0), "size {map_type} drifted");
+        }
+    }
+
+    #[test]
+    fn the_four_sizes_reach_different_heights() {
+        // stepmax = map_actor_type * 3 (game1.c:10231), so a bigger
+        // special actor makes a taller jet.
+        let peak = |map_type: i32| {
+            let mut f = fountain(map_type);
+            let mut high = 0;
+            for _ in 0..(f.step_max + 10) {
+                step_fountain(&mut f);
+                high = high.max(f.height);
+            }
+            high
+        };
+        let peaks: Vec<i32> = (2..=5).map(peak).collect();
+        assert_eq!(peaks, vec![5, 8, 11, 14], "small to huge");
+        assert!(peaks.windows(2).all(|w| w[0] < w[1]), "and strictly taller");
+    }
+
+    #[test]
+    fn a_fountain_never_rises_before_it_has_fallen_back() {
+        // The pause at each end is what makes it readable as a jet rather
+        // than a jitter (game1.c:1673).
+        let mut f = fountain(3);
+        let mut paused = 0;
+        for _ in 0..(f.step_max + 10) {
+            let before = f.height;
+            step_fountain(&mut f);
+            if f.height == before {
+                paused += 1;
+            }
+        }
+        assert!(paused >= 10, "it should hold at the top, held {paused}");
+    }
+
+    #[test]
+    fn a_platforms_route_is_read_out_of_the_map() {
+        // The cell a platform sits on holds `DIR8 * 8` as its raw tile
+        // value. Those are all below TILE_STRIPED_PLATFORM (80), which is
+        // why the renderer treats them as air - so a route command is
+        // invisible, which is the point.
+        for (dir, (dx, dy)) in crate::effects::DIR8.iter().enumerate() {
+            let raw = (dir * 8) as u16;
+            assert!(
+                raw < 80,
+                "a route command must be invisible, but {raw} would draw"
+            );
+            assert_eq!(crate::effects::DIR8[(raw / 8) as usize], (*dx, *dy));
+        }
+    }
+
+    #[test]
+    fn the_middle_of_a_cone_is_fully_lit() {
+        for row in 0..8 {
+            assert_eq!(LightSide::Middle.row_mask(row), [true; 8]);
+        }
+    }
+
+    #[test]
+    fn the_cone_edges_ramp_in_opposite_directions() {
+        // Transcribed from the EGA bit masks: west fills from the east
+        // edge (00000001b upward), east from the west edge (10000000b).
+        // Mirroring these the wrong way puts the slope on the wrong side
+        // of every light in the game.
+        assert_eq!(
+            LightSide::West.row_mask(0),
+            [false, false, false, false, false, false, false, true],
+            "the west edge starts as a single lit pixel on the right"
+        );
+        assert_eq!(
+            LightSide::East.row_mask(0),
+            [true, false, false, false, false, false, false, false],
+            "and the east edge on the left"
+        );
+        // Both are full by the last row.
+        assert_eq!(LightSide::West.row_mask(7), [true; 8]);
+        assert_eq!(LightSide::East.row_mask(7), [true; 8]);
+        // ...and each one widens by exactly one pixel per row.
+        for row in 0..8 {
+            assert_eq!(
+                LightSide::West.row_mask(row).iter().filter(|b| **b).count(),
+                row + 1
+            );
+            assert_eq!(
+                LightSide::East.row_mask(row).iter().filter(|b| **b).count(),
+                row + 1
+            );
+        }
+    }
+
+    #[test]
+    fn episode_one_casts_shorter_than_the_others() {
+        // episode1.h:20 against episode2.h:20 and episode3.h:20.
+        assert_eq!(light_cast_distance(1), 11);
+        assert_eq!(light_cast_distance(2), 13);
+        assert_eq!(light_cast_distance(3), 13);
+    }
+}
+
+/// A moving platform placed by `SPA_PLATFORM` (map_type 1).
+///
+/// The platform is five tiles wide and does not exist as artwork: it
+/// stamps `TILE_BLUE_PLATFORM` into the map under itself and stashes
+/// whatever it covered, restoring that as it moves on (game1.c:1660-1690).
+///
+/// Its route is in the map too. The cell it currently sits on holds a
+/// direction command - a raw tile value below `TILE_STRIPED_PLATFORM`,
+/// which is why the renderer treats those as air - and `value / 8` is the
+/// `DIR8` index it travels next.
+#[derive(Component)]
+pub struct Platform {
+    pub x: i32,
+    pub y: i32,
+    /// The five tiles currently underneath it, west to east.
+    pub stash: [u16; 5],
+}
+
+/// `TILE_BLUE_PLATFORM` (graphics.h:130); the five cells step by 8.
+const TILE_BLUE_PLATFORM: u16 = 0x3dd0;
+
+pub fn spawn_level_platforms(commands: &mut Commands, level: &LevelJson) {
+    for a in &level.actors {
+        if a.map_type != 1 {
+            continue;
+        }
+        commands.spawn((
+            Platform {
+                x: a.x as i32,
+                y: a.y as i32,
+                stash: [0; 5],
+            },
+            LevelScoped,
+        ));
+    }
+}
+
+/// `MovePlatforms` (game1.c:1660-1690), and the part of
+/// `MovePlayerPlatform` that carries a rider (game1.c:1500-1560).
+///
+/// NOT PORTED: the scroll nudges the original applies while riding, which
+/// depend on the look-up/down commands.
+pub fn move_platforms(
+    mut commands: Commands,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    data: Res<GameData>,
+    mut tile_index: ResMut<TileIndex>,
+    mut current: ResMut<crate::level::CurrentLevel>,
+    switches: Res<crate::enemy_ai::SwitchState>,
+    mut platforms: Query<&mut Platform>,
+    mut player_q: Query<&mut crate::player::Player>,
+) {
+    let Some(tileset) = tileset else {
+        return;
+    };
+    for mut plat in &mut platforms {
+        // Put back what it was covering before reading anything.
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                plat.y,
+                plat.stash[i],
+            );
+        }
+
+        // The route command lives in the cell the platform sits on.
+        let raw = if plat.x >= 0 && plat.y >= 0 {
+            current.level.tile_at(plat.x as usize, plat.y as usize)
+        } else {
+            0
+        };
+        let dir = (raw / 8) as usize % 9;
+        let (dx, dy) = crate::effects::DIR8[dir];
+
+        if switches.platforms_active {
+            if let Ok(mut player) = player_q.single_mut() {
+                // A rider is anyone whose feet are on the platform's row.
+                let on_it = player.dead_timer == 0
+                    && plat.y - 1 == player.y
+                    && player.x >= plat.x - 2
+                    && player.x <= plat.x + 2;
+                if on_it {
+                    player.x += dx;
+                    player.y += dy;
+                }
+            }
+            plat.x += dx;
+            plat.y += dy;
+        }
+
+        // Stash the new footprint, then stamp the platform over it.
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            plat.stash[i] = if x >= 0 && plat.y >= 0 {
+                current.level.tile_at(x as usize, plat.y as usize)
+            } else {
+                0
+            };
+        }
+        for i in 0..5 {
+            let x = plat.x + i as i32 - 2;
+            set_map_tile(
+                &mut commands,
+                &tileset,
+                &data,
+                &mut tile_index,
+                &mut current.level,
+                x,
+                plat.y,
+                TILE_BLUE_PLATFORM + (i as u16 * 8),
+            );
+        }
+    }
+}
+
+/// A water jet placed by `SPA_FOUNTAIN_SMALL`..`_HUGE` (map_type 2-5).
+///
+/// The jet rises and falls on a cycle whose length comes from which of the
+/// four sizes it is - `stepmax = map_actor_type * 3` (game1.c:10231) - and
+/// pausing ten ticks at each end. Its top two cells are stamped as
+/// invisible platform so the player can ride it, and the column of water
+/// below hurts on contact (game1.c:1696).
+#[derive(Component)]
+pub struct Fountain {
+    pub x: i32,
+    pub y: i32,
+    /// True while rising. Starts north (game1.c:10228).
+    pub north: bool,
+    pub step: i32,
+    pub step_max: i32,
+    /// How many cells of water are showing below the nozzle.
+    pub height: i32,
+    pub delay: i32,
+}
+
+/// `TILE_INVISIBLE_PLATFORM` (graphics.h:121) - solid to stand on, drawn
+/// as nothing, which is what lets the fountain carry the player without
+/// the platform itself being visible.
+const TILE_INVISIBLE_PLATFORM: u16 = 0x0048;
+
+pub fn spawn_level_fountains(commands: &mut Commands, level: &LevelJson) {
+    for a in &level.actors {
+        if !(2..=5).contains(&a.map_type) {
+            continue;
+        }
+        commands.spawn((
+            Fountain {
+                // The loader offsets both axes by one (game1.c:10226-10227).
+                x: a.x as i32 - 1,
+                y: a.y as i32 - 1,
+                north: true,
+                step: 0,
+                step_max: a.map_type as i32 * 3,
+                height: 0,
+                delay: 0,
+            },
+            LevelScoped,
+        ));
+    }
+}
+
+/// `MoveFountains` (game1.c:1660-1712).
+pub fn move_fountains(
+    mut commands: Commands,
+    tileset: Option<Res<crate::tileset::TilesetAssets>>,
+    data: Res<GameData>,
+    mut tile_index: ResMut<TileIndex>,
+    mut current: ResMut<crate::level::CurrentLevel>,
+    mut fountains: Query<&mut Fountain>,
+    mut player_q: Query<&mut crate::player::Player>,
+) {
+    let Some(tileset) = tileset else {
+        return;
+    };
+    for mut f in &mut fountains {
+        if f.delay != 0 {
+            f.delay -= 1;
+            continue;
+        }
+        f.step += 1;
+        if f.step == f.step_max {
+            // Reached the end of its travel: turn around and hold.
+            f.step = 0;
+            f.north = !f.north;
+            f.delay = 10;
+            continue;
+        }
+
+        // Lift the platform before moving, so the cells it vacates do not
+        // stay solid behind it.
+        for dx in [0, 2] {
+            set_map_tile(
+                &mut commands, &tileset, &data, &mut tile_index,
+                &mut current.level, f.x + dx, f.y, 0,
+            );
+        }
+
+        if let Ok(mut player) = player_q.single_mut() {
+            let riding = player.dead_timer == 0
+                && f.y - 1 == player.y
+                && player.x >= f.x
+                && player.x <= f.x + 2;
+            if riding {
+                player.y += if f.north { -1 } else { 1 };
+            }
+        }
+
+        if f.north {
+            f.y -= 1;
+            f.height += 1;
+        } else {
+            f.y += 1;
+            f.height -= 1;
+        }
+
+        for dx in [0, 2] {
+            set_map_tile(
+                &mut commands, &tileset, &data, &mut tile_index,
+                &mut current.level, f.x + dx, f.y, TILE_INVISIBLE_PLATFORM,
+            );
+        }
+    }
+}
+
+/// One drawn cell of a fountain: the nozzle, or a length of its water.
+#[derive(Component)]
+pub struct FountainSprite {
+    owner: Entity,
+}
+
+/// `SPR_FOUNTAIN` (sprite.h:101).
+const SPR_FOUNTAIN: u16 = 79;
+
+/// `DrawFountains` (game1.c:1680-1706). Draws the nozzle and the column of
+/// water hanging below it, and hurts the player anywhere along that column.
+///
+/// The original redraws every cell each frame; here the column is rebuilt
+/// when its height changes, which is the only time it differs.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_fountains(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    data: Res<GameData>,
+    fountains: Query<(Entity, &Fountain)>,
+    cells: Query<(Entity, &FountainSprite)>,
+    mut player_q: Query<&mut crate::player::Player>,
+    mut sfx: EventWriter<crate::sfx::PlaySfx>,
+    mut drawn: Local<bevy::platform::collections::HashMap<Entity, (i32, i32)>>,
+) {
+    let rel_dir = format!("sprites/actors/{SPR_FOUNTAIN}");
+    let manifest = data.load_sprite_manifest(&rel_dir);
+
+    for (entity, f) in &fountains {
+        // Rebuild only when the shape actually changed.
+        if drawn.get(&entity).copied() == Some((f.y, f.height)) {
+            continue;
+        }
+        drawn.insert(entity, (f.y, f.height));
+        for (cell, owned) in &cells {
+            if owned.owner == entity {
+                commands.entity(cell).despawn();
+            }
+        }
+        let Some(manifest) = manifest.as_ref() else {
+            continue;
+        };
+        let mut put = |frame: usize, x: i32, y: i32, commands: &mut Commands| {
+            let Some(meta) = manifest.frames.get(frame) else {
+                return;
+            };
+            let h_tiles = (meta.height_px as f32 / 8.0).ceil();
+            let pos = tile_topleft_to_center(
+                x as f32,
+                y as f32 - h_tiles + 1.0,
+                meta.width_px as f32,
+                meta.height_px as f32,
+            );
+            commands.spawn((
+                Sprite {
+                    image: asset_server
+                        .load(crate::data::asset_path(&format!("{rel_dir}/{}", meta.file))),
+                    ..default()
+                },
+                Transform::from_translation(pos.extend(6.0)),
+                FountainSprite { owner: entity },
+                LevelScoped,
+            ));
+        };
+        // The nozzle sits a row below the platform cells it stamps.
+        put(0, f.x, f.y + 1, &mut commands);
+        for i in 0..=f.height {
+            put(2, f.x + 1, f.y + i + 1, &mut commands);
+        }
+    }
+
+    // Standing in the water hurts (game1.c:1696).
+    let Ok(mut player) = player_q.single_mut() else {
+        return;
+    };
+    if player.dead_timer != 0 || player.is_invincible() || player.hurt_cooldown > 0 {
+        return;
+    }
+    for (_, f) in &fountains {
+        let in_column = player.x <= f.x + 1
+            && player.x + crate::player::PLAYER_WIDTH - 1 >= f.x + 1
+            && player.y >= f.y + 1
+            && player.y <= f.y + f.height + 1;
+        if in_column {
+            player.cling_dir = None;
+            player.health -= 1;
+            if player.health <= 0 {
+                player.dead_timer = 1;
+            } else {
+                sfx.write(crate::sfx::PlaySfx(crate::sfx::snd::PLAYER_HURT));
+                player.hurt_cooldown = 44;
+            }
+            return;
+        }
+    }
+}

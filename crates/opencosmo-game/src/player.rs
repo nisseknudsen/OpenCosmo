@@ -83,6 +83,36 @@ pub struct Player {
     /// movement commands are ignored, which is what `blockMovementCmds`
     /// does there.
     pub push: Option<Push>,
+    /// `scooterMounted` (game1.c:237). Set to 4 on mounting and counted
+    /// down to 1, which is what gives the scooter its initial lift; it
+    /// stays 1 for as long as the player is riding.
+    pub scooter: u32,
+    /// `isPlayerInPipe` - riding the pipe network. The player is drawn
+    /// hidden and cannot be hurt while inside one (game1.c:6905).
+    pub in_pipe: bool,
+    /// A head-shake queued by something that disorients: leaving a pipe,
+    /// a transporter, a hard landing. It only starts once the player is
+    /// back on the ground (game1.c:9135).
+    pub dizzy_queued: bool,
+    /// Ticks of head-shake left. While this runs the player cannot move,
+    /// act, or pounce (game1.c:8453, 6848).
+    pub dizzy_left: u32,
+    /// `blockActionCmds` - blocks the whole player tick without being a
+    /// hold, which is how the tulip launcher and bear trap freeze you
+    /// (game1.c:8453).
+    pub block_action: bool,
+    /// `isPlayerLongJumping` - a pounce or a shove gives a longer arc than
+    /// an ordinary jump (game1.c:6862).
+    pub long_jumping: bool,
+    /// `pounceStreak` - ten single-recoil pounces in a row earn a bonus in
+    /// the original (game1.c:6874-6880); anything else breaks the run.
+    pub pounce_streak: u32,
+    /// `isPounceReady` - set while the player is descending onto something
+    /// (game1.c:7085); a pounce only counts toward a streak when it is set.
+    pub pounce_ready: bool,
+    /// `playerFallDeadTime` - the separate death animation for falling off
+    /// the bottom of the map (game1.c:9166-9190).
+    pub fall_dead_time: u32,
     /// Held in place by something - the bear trap. `blockMovementCmds` in
     /// the original (game1.c:7753); the player can still be hurt and can
     /// still die, they just cannot walk out.
@@ -144,6 +174,15 @@ impl Player {
             idle_count: 0,
             invincible_ticks: 0,
             push: None,
+            scooter: 0,
+            in_pipe: false,
+            dizzy_queued: false,
+            dizzy_left: 0,
+            block_action: false,
+            long_jumping: false,
+            pounce_streak: 0,
+            pounce_ready: false,
+            fall_dead_time: 0,
             held_ticks: 0,
             rng: 0x1337_beef,
         }
@@ -165,8 +204,10 @@ impl Player {
     /// this as its own variable but every site in `MovePlayer` moves it in
     /// lockstep with `playerFaceDir`, so it is derived here instead.
     /// `isPlayerInvincible` (game1.c:6905) - blocks all contact damage.
+    /// `HurtPlayer` bails on any of these (game1.c:6905) - riding a pipe
+    /// is as safe as the invincibility bubble.
     pub fn is_invincible(&self) -> bool {
-        self.invincible_ticks > 0
+        self.invincible_ticks > 0 || self.in_pipe
     }
 
     pub fn base_frame(&self) -> usize {
@@ -181,18 +222,91 @@ impl Player {
     /// genuinely falling, or past the jump curve's apex - and refuses to
     /// re-trigger mid-bounce.
     pub fn try_pounce(&mut self, recoil: i32) -> bool {
-        if self.dead_timer != 0 {
+        // A dizzy player cannot pounce (game1.c:6848).
+        if self.dead_timer != 0 || self.dizzy_left != 0 {
             return false;
         }
         let descending = self.is_falling || self.jump_time > 6;
+        // `TryPounce` requires the alignment test to have armed it
+        // (game1.c:6855). It is *not* cleared here - the alignment pass
+        // re-arms it per actor, which is what lets one tick pounce two
+        // things stacked on each other (game1.c:7077).
+        if !self.pounce_ready {
+            return false;
+        }
         if (self.is_recoiling && self.recoil_left >= 2) || !descending {
             return false;
         }
         self.recoil_left = recoil + 1;
         self.is_recoiling = true;
-        self.is_falling = false;
-        self.fall_time = 0;
+        // Deliberately does *not* clear `is_falling`/`fall_time`: the
+        // original's TryPounce leaves both alone (game1.c:6857-6858) and
+        // lets the recoil branch of MovePlayer sort them out. Clearing
+        // them here also broke stepping off a scooter, which sets falling
+        // and then calls this for its side effects.
+        // Landing on something shakes off a queued head-shake
+        // (game1.c:6859).
+        self.clear_dizzy();
+        // Only the hardest recoils count as a long jump - a plain creature
+        // gives 7, which does not (game1.c:6862-6866).
+        self.long_jumping = recoil > 18;
+        // `pounceStreak`: ten ordinary pounces in a row is worth a bonus.
+        // Anything with a different recoil breaks the run.
+        if recoil == 7 {
+            self.pounce_streak += 1;
+            if self.pounce_streak == 10 {
+                self.pounce_streak = 0;
+            }
+        } else {
+            self.pounce_streak = 0;
+        }
         true
+    }
+
+    /// `ProcessPlayerDizzy` (game1.c:9122-9151). A queued head-shake waits
+    /// for the player to be back on the ground before it starts, and
+    /// grabbing a wall cancels it outright.
+    pub fn process_dizzy(&mut self, grounded: bool) {
+        if self.cling_dir.is_some() {
+            self.dizzy_queued = false;
+            self.dizzy_left = 0;
+            return;
+        }
+        if self.dizzy_queued && grounded {
+            self.dizzy_queued = false;
+            self.dizzy_left = 8;
+        }
+        if self.dizzy_left != 0 {
+            self.dizzy_left -= 1;
+            self.is_falling = false;
+        }
+    }
+
+    /// Clears everything that should not survive a level change. Riding a
+    /// pipe left the player hidden and immune on the next level, which
+    /// looked like spawning invisible at a random spot - `InitializeLevel`
+    /// resets all of this (game1.c:10441-10443).
+    pub fn reset_transient_state(&mut self) {
+        self.in_pipe = false;
+        self.scooter = 0;
+        self.push = None;
+        self.held_ticks = 0;
+        self.block_action = false;
+        self.clear_dizzy();
+        self.is_recoiling = false;
+        self.recoil_left = 0;
+        self.long_jumping = false;
+    }
+
+    /// `SET_PLAYER_DIZZY` (game1.c:246).
+    pub fn queue_dizzy(&mut self) {
+        self.dizzy_queued = true;
+    }
+
+    /// `ClearPlayerDizzy` (game1.c:307).
+    pub fn clear_dizzy(&mut self) {
+        self.dizzy_queued = false;
+        self.dizzy_left = 0;
     }
 }
 
@@ -319,6 +433,40 @@ fn attr_at(level: &crate::data::LevelJson, data: &GameData, x: i32, y: i32) -> u
 
 /// Faithful port of TestPlayerMove; `can_cling` is an out-param mirroring
 /// the original's side-effecting global write during WEST/EAST checks.
+/// Which way a slippery slope under the player's feet pulls them.
+///
+/// The original hangs this off `TestPlayerMove(DIR4_SOUTH)` as a side
+/// effect and then calls that function purely for it (game1.c:8567,
+/// "used for side effects"). Keeping it a query of its own says what it
+/// means and leaves `test_move` answering one question.
+///
+/// Only the outer two of the player's three columns are consulted, and a
+/// tile counts only if it is sloped, slippery, and *not* solid
+/// (game1.c:1062-1073).
+fn slide_dir(
+    x: i32,
+    y: i32,
+    level: &crate::data::LevelJson,
+    data: &GameData,
+) -> Option<FaceDir> {
+    let slippery_slope = |col: i32| {
+        let a = attr_at(level, data, col, y);
+        a & TILE_ATTR_BLOCK_SOUTH == 0
+            && a & TILE_ATTR_SLOPED != 0
+            && a & crate::data::TILE_ATTR_SLIPPERY != 0
+    };
+    let east = slippery_slope(x);
+    let west = slippery_slope(x + PLAYER_WIDTH - 1);
+    // Both at once cancel: the original's guard is
+    // `if (!isPlayerSlidingEast || !isPlayerSlidingWest)` (game1.c:8568),
+    // so a dip with slippery slopes on each side holds the player still.
+    match (east, west) {
+        (true, false) => Some(FaceDir::East),
+        (false, true) => Some(FaceDir::West),
+        _ => None,
+    }
+}
+
 fn test_move(
     dir: Direction,
     x: i32,
@@ -464,6 +612,133 @@ fn move_player_push(
     true
 }
 
+/// `MovePlayerScooter` (game1.c:8880-9040). Riding one replaces the whole
+/// walking model: the player flies freely in four directions, held by
+/// walls rather than by gravity, and jumping steps off it.
+///
+/// Returns the exhaust puffs to emit, since the mover itself stays a pure
+/// function over the player and the level.
+///
+/// NOT PORTED: dropping bombs sideways while riding, which is a second
+/// copy of the bomb path with its own reach tests.
+/// One puff of scooter exhaust, drained by a system with the assets.
+#[derive(Event)]
+pub struct ScooterExhaust {
+    pub x: i32,
+    pub y: i32,
+    pub dir: usize,
+}
+
+pub fn move_player_scooter(
+    p: &mut Player,
+    scroll: &mut crate::camera::Scroll,
+    level: &crate::data::LevelJson,
+    data: &GameData,
+    input: &PlayerInput,
+    map_width: i32,
+) -> Vec<(i32, i32, usize)> {
+    let mut exhaust = Vec::new();
+    p.clear_dizzy();
+    p.pounce_ready = false;
+    p.recoil_left = 0;
+    p.is_falling = false;
+    if p.dead_timer != 0 {
+        return exhaust;
+    }
+
+    // The first few ticks after mounting force it upward, which is the
+    // lift that gets the player clear of whatever they landed on.
+    let forced_up = p.scooter > 1;
+    if forced_up {
+        p.scooter -= 1;
+    } else if input.jump {
+        // Stepping off: a jump, with the recoil of a small pounce.
+        p.cmd_jump_latch = true;
+        p.scooter = 0;
+        p.is_falling = true;
+        p.fall_time = 1;
+        p.is_recoiling = false;
+        p.pounce_ready = true;
+        p.try_pounce(9);
+        p.recoil_left -= 2;
+        return exhaust;
+    }
+
+    let blocked = |dir: Direction, x: i32, y: i32| {
+        let mut ignored = false;
+        test_move(dir, x, y, level, data, &mut ignored) != MoveResult::Free
+    };
+
+    if input.west && !input.east {
+        if p.face_dir == FaceDir::West {
+            p.x -= 1;
+        }
+        p.face_dir = FaceDir::West;
+        if p.x < 1 {
+            p.x += 1;
+        }
+        if blocked(Direction::West, p.x, p.y) || blocked(Direction::West, p.x, p.y + 1) {
+            p.x += 1;
+        }
+        if p.x % 2 != 0 {
+            exhaust.push((p.x + 3, p.y + 1, crate::effects::DIR8_EAST));
+        }
+    }
+
+    if input.east && !input.west {
+        if p.face_dir != FaceDir::West {
+            p.x += 1;
+        }
+        p.face_dir = FaceDir::East;
+        if map_width - 4 < p.x {
+            p.x -= 1;
+        }
+        if blocked(Direction::East, p.x, p.y) || blocked(Direction::East, p.x, p.y + 1) {
+            p.x -= 1;
+        }
+        if p.x % 2 != 0 {
+            exhaust.push((p.x - 1, p.y + 1, crate::effects::DIR8_WEST));
+        }
+    }
+
+    let up = input.look_up || forced_up;
+    if up && !input.look_down {
+        if p.y > 4 {
+            p.y -= 1;
+        }
+        if blocked(Direction::North, p.x, p.y) {
+            p.y += 1;
+        }
+        if p.y % 2 != 0 {
+            exhaust.push((p.x + 1, p.y + 1, crate::effects::DIR8_SOUTH));
+        }
+    } else if input.look_down && !up {
+        // The floor of the map, not of the level - a scooter can fly below
+        // the terrain's own floor but not off the map.
+        if crate::camera::max_scroll_y(level.width) + 17 > p.y {
+            p.y += 1;
+        }
+        if blocked(Direction::South, p.x, p.y + 1) {
+            p.y -= 1;
+        }
+    }
+
+    // The view follows, as it does for a platform ride.
+    if p.y - scroll.y > crate::camera::SCROLL_H - 4 {
+        scroll.y += 1;
+    } else if p.y - scroll.y < 7 && scroll.y > 0 {
+        scroll.y -= 1;
+    }
+    if p.x - scroll.x > crate::camera::SCROLL_W - 15
+        && map_width - crate::camera::SCROLL_W > scroll.x
+    {
+        scroll.x += 1;
+    } else if p.x - scroll.x < 12 && scroll.x > 0 {
+        scroll.x -= 1;
+    }
+    exhaust
+}
+
 pub fn move_player_tick(
     mut query: Query<&mut Player>,
     input: Res<PlayerInput>,
@@ -471,6 +746,7 @@ pub fn move_player_tick(
     data: Res<GameData>,
     mut scroll: ResMut<crate::camera::Scroll>,
     mut sfx: EventWriter<PlaySfx>,
+    mut exhaust: EventWriter<ScooterExhaust>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -479,6 +755,38 @@ pub fn move_player_tick(
         return; // frozen during the death animation, game1.c:8452
     }
     let level = &level_data.level;
+    // A queued head-shake starts once the player is back on the ground,
+    // and runs to completion before they get control again
+    // (game1.c:9122-9151).
+    if p.dizzy_queued || p.dizzy_left != 0 {
+        let mut ignored = false;
+        let grounded = test_move(Direction::South, p.x, p.y + 1, level, &data, &mut ignored)
+            != MoveResult::Free;
+        p.process_dizzy(grounded);
+    }
+
+    // `blockActionCmds` and the dizzy shake both stop the whole tick, not
+    // just movement (game1.c:8452-8454).
+    if p.dizzy_left != 0 || p.block_action {
+        return;
+    }
+
+    // On a scooter the walking model is replaced entirely.
+    if p.scooter != 0 {
+        let puffs = move_player_scooter(
+            &mut p,
+            &mut scroll,
+            level,
+            &data,
+            &input,
+            level.width as i32,
+        );
+        for (x, y, dir) in puffs {
+            exhaust.write(ScooterExhaust { x, y, dir });
+        }
+        return;
+    }
+
     // Held fast by a trap: the tick still runs (gravity, damage, death)
     // but the movement commands are ignored (game1.c:7753).
     if p.held_ticks > 0 {
@@ -639,6 +947,21 @@ pub fn move_player_tick(
             p.fall_time = 0;
             p.y += 1;
         }
+    } else if let Some(dir) = slide_dir(p.x, p.y + 1, &level, &data) {
+        // --- Ice slide (game1.c:8565-8605) ---
+        // Standing still on a slippery slope slides the player down it,
+        // and the view follows so they cannot be slid off the screen.
+        // Clinging to a wall overrides it - the slide only moves a player
+        // whose feet are on the slope.
+        if p.cling_dir.is_none() {
+            p.x += if dir == FaceDir::East { 1 } else { -1 };
+            if test_move(Direction::South, p.x, p.y + 1, &level, &data, &mut dummy_cling)
+                == MoveResult::Free
+            {
+                p.y += 1;
+            }
+        }
+        p.cling_dir = None;
     }
 
     if p.cling_dir.is_some() && p.cmd_jump_latch && !input.jump {
@@ -659,6 +982,11 @@ pub fn move_player_tick(
             // jump while the counter is high, giving a pounce its
             // characteristic springy launch.
             p.recoil_left -= 1;
+            // The long-jump flag survives only the first, fastest part of
+            // the recoil (game1.c:8700-8712).
+            if p.recoil_left < 10 {
+                p.long_jumping = false;
+            }
             if p.recoil_left > 1 {
                 p.y -= 1;
             }
@@ -668,6 +996,10 @@ pub fn move_player_tick(
                     == MoveResult::Free
                 {
                     p.y -= 1;
+                } else {
+                    // Hitting a ceiling ends the long jump early
+                    // (game1.c:8712).
+                    p.long_jumping = false;
                 }
             }
             new_jump = false;
@@ -675,6 +1007,7 @@ pub fn move_player_tick(
                 p.jump_time = 0;
                 p.is_recoiling = false;
                 p.fall_time = 0;
+                p.long_jumping = false;
                 p.cmd_jump_latch = true;
             }
         } else {
@@ -777,8 +1110,12 @@ pub fn move_player_tick(
     // silently respawn the player at the level start, which skipped the
     // death entirely - no animation, no cost, and the level left as it was.
     let bottom = crate::camera::max_scroll_y(level.width) + crate::camera::SCROLL_H + 3;
-    if p.y > bottom {
+    if p.y > bottom && p.dead_timer == 0 {
         p.dead_timer = 1;
+        // Falling out of the world is its own death, not the ordinary one:
+        // the body does not rise and the sequence runs longer
+        // (game1.c:9165-9211).
+        p.fall_dead_time = 1;
     }
 }
 
@@ -807,6 +1144,26 @@ pub fn update_death(
         sfx.write(PlaySfx(snd::PLAYER_HURT));
     }
     p.dead_timer += 1;
+
+    if p.fall_dead_time != 0 {
+        // The falling death (game1.c:9177-9211). The body is already gone
+        // off the bottom, so nothing rises; it is a held beat, the jingle,
+        // and a restart at thirty.
+        //
+        // NOT PORTED: the speech bubble that rises up the screen through
+        // it - see the speech bubble issue.
+        p.fall_dead_time += 1;
+        if p.fall_dead_time == 13 {
+            sfx.write(PlaySfx(snd::PLAYER_DEATH));
+        }
+        if p.fall_dead_time > 30 {
+            p.fall_dead_time = 0;
+            p.dead_timer = 0;
+            restart.write(crate::flow::RestartLevel);
+        }
+        return;
+    }
+
     // The death jingle lands partway in, once the body starts rising
     // (game1.c:9243-9244).
     if p.dead_timer == 10 {
@@ -823,6 +1180,23 @@ pub fn update_death(
     if p.dead_timer > 36 {
         p.dead_timer = 0;
         restart.write(crate::flow::RestartLevel);
+    }
+}
+
+/// `PLAYER_HIDDEN` (player.h:54) is the *push's* forced frame, not a
+/// property of being in a pipe: the player is only invisible while a
+/// corner is actually carrying them (game1.c:7620). Hiding them for as
+/// long as `in_pipe` was set left them invisible whenever they entered a
+/// pipe and never reached a corner - and, until the level change cleared
+/// it, on every level after that too.
+pub fn sync_player_visibility(mut query: Query<(&Player, &mut Visibility)>) {
+    for (p, mut vis) in &mut query {
+        let want = if p.in_pipe && p.push.is_some() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        vis.set_if_neq(want);
     }
 }
 
@@ -886,6 +1260,7 @@ pub fn update_frame_and_scroll(
     mut scroll: ResMut<crate::camera::Scroll>,
     near_globe: Res<crate::hints::NearHintGlobe>,
     mut sfx: EventWriter<PlaySfx>,
+    mut exhaust: EventWriter<ScooterExhaust>,
 ) {
     let Ok(mut p) = query.single_mut() else {
         return;
@@ -1070,6 +1445,261 @@ pub fn apply_player_frame(mut query: Query<(&Player, &mut Sprite)>, frames: Res<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_level_change_clears_the_states_a_level_does_not_carry() {
+        // Riding a pipe left the player hidden and immune on the next
+        // level, which reads as spawning invisible somewhere random.
+        let mut p = Player::spawn_at(10, 10);
+        p.in_pipe = true;
+        p.scooter = 3;
+        p.set_push(1, 0, 100, 2, false, false);
+        p.held_ticks = 5;
+        p.block_action = true;
+        p.queue_dizzy();
+        p.is_recoiling = true;
+        p.recoil_left = 9;
+
+        p.reset_transient_state();
+
+        assert!(!p.in_pipe);
+        assert_eq!(p.scooter, 0);
+        assert!(p.push.is_none());
+        assert_eq!(p.held_ticks, 0);
+        assert!(!p.block_action);
+        assert_eq!(p.dizzy_left, 0);
+        assert!(!p.dizzy_queued);
+        assert!(!p.is_recoiling);
+        assert_eq!(p.recoil_left, 0);
+        // Things a level *does* carry are left alone.
+        assert_eq!(p.health, Player::spawn_at(0, 0).health);
+    }
+
+    #[test]
+    fn only_a_carried_player_is_hidden() {
+        // PLAYER_HIDDEN is the push's forced frame, not a property of
+        // being in a pipe (game1.c:7620). Being in one without a corner
+        // carrying you must still draw you.
+        let mut p = Player::spawn_at(10, 10);
+        p.in_pipe = true;
+        assert!(p.push.is_none());
+        assert!(
+            !(p.in_pipe && p.push.is_some()),
+            "in a pipe but not being carried: still visible"
+        );
+        p.set_push(1, 0, 100, 2, false, false);
+        assert!(p.in_pipe && p.push.is_some(), "carried: hidden");
+    }
+
+    fn flat_world() -> (crate::data::LevelJson, GameData) {
+        // Open air with a floor, so a scooter can fly.
+        let rows = ["................"; 8];
+        let width = rows[0].len();
+        let mut tiles = Vec::new();
+        for _ in rows {
+            tiles.extend(std::iter::repeat_n(0u16, width));
+        }
+        let level = crate::data::LevelJson {
+            name: "t".into(),
+            width,
+            height: rows.len(),
+            tiles,
+            actors: Vec::new(),
+            backdrop: None,
+            music: None,
+            has_h_scroll_backdrop: false,
+            has_v_scroll_backdrop: false,
+        };
+        let data = GameData {
+            root: std::path::PathBuf::new(),
+            asset_prefix: String::new(),
+            episode: 1,
+            tileset: crate::data::TilesetJson {
+                tile_size: 8,
+                atlas_cols: 1,
+                solid_tile_count: 1,
+                masked_tile_count: 0,
+            },
+            tile_attrs: vec![0u8; 16],
+        };
+        (level, data)
+    }
+
+    #[test]
+    fn a_scooter_lifts_off_before_it_takes_orders() {
+        // Mounting sets 4, and the first three ticks force it upward
+        // whatever the player asks for (game1.c:8895).
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 4;
+        let start = p.y;
+        let idle = PlayerInput::default();
+        for _ in 0..3 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &idle, 16);
+        }
+        assert!(p.y < start, "it should have climbed without being asked");
+        assert_eq!(p.scooter, 1, "and settled into free flight");
+    }
+
+    #[test]
+    fn a_scooter_flies_where_it_is_steered() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let (x0, y0) = (p.x, p.y);
+
+        let east = PlayerInput { east: true, ..default() };
+        for _ in 0..4 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &east, 16);
+        }
+        assert!(p.x > x0, "east should move it east");
+
+        let down = PlayerInput { look_down: true, ..default() };
+        for _ in 0..3 {
+            move_player_scooter(&mut p, &mut scroll, &level, &data, &down, 16);
+        }
+        assert!(p.y > y0, "and down should move it down - no gravity here");
+    }
+
+    #[test]
+    fn jumping_steps_off_the_scooter() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let jump = PlayerInput { jump: true, ..default() };
+        move_player_scooter(&mut p, &mut scroll, &level, &data, &jump, 16);
+        assert_eq!(p.scooter, 0, "dismounted");
+        assert!(p.is_falling, "and falling again");
+    }
+
+    #[test]
+    fn a_scooter_puffs_as_it_travels() {
+        let (level, data) = flat_world();
+        let mut scroll = crate::camera::Scroll::default();
+        let mut p = Player::spawn_at(8, 12);
+        p.scooter = 1;
+        let east = PlayerInput { east: true, ..default() };
+        let puffs: usize = (0..8)
+            .map(|_| move_player_scooter(&mut p, &mut scroll, &level, &data, &east, 16).len())
+            .sum();
+        assert!(puffs > 0, "it should leave exhaust behind it");
+    }
+
+    #[test]
+    fn a_queued_head_shake_waits_for_the_ground() {
+        let mut p = Player::spawn_at(0, 10);
+        p.queue_dizzy();
+
+        // Airborne: it stays queued rather than starting.
+        for _ in 0..10 {
+            p.process_dizzy(false);
+        }
+        assert!(p.dizzy_queued, "still waiting");
+        assert_eq!(p.dizzy_left, 0);
+
+        // Landing starts it. The original sets 8 and decrements in the
+        // same pass, so it reads 7 after the tick that begins it.
+        p.process_dizzy(true);
+        assert!(!p.dizzy_queued);
+        assert_eq!(p.dizzy_left, 7);
+
+        let mut ticks = 1;
+        while p.dizzy_left != 0 {
+            p.process_dizzy(true);
+            ticks += 1;
+        }
+        assert_eq!(ticks, 8, "the shake lasts eight ticks");
+    }
+
+    #[test]
+    fn grabbing_a_wall_cancels_a_head_shake() {
+        // game1.c:9130 - clinging clears both the queue and the shake.
+        let mut p = Player::spawn_at(0, 10);
+        p.queue_dizzy();
+        p.process_dizzy(true);
+        assert_ne!(p.dizzy_left, 0, "shaking");
+
+        p.cling_dir = Some(FaceDir::West);
+        p.process_dizzy(true);
+        assert_eq!(p.dizzy_left, 0);
+        assert!(!p.dizzy_queued);
+    }
+
+    #[test]
+    fn a_dizzy_player_cannot_pounce() {
+        let mut p = Player::spawn_at(0, 10);
+        p.pounce_ready = true;
+        p.is_falling = true;
+        p.dizzy_left = 5;
+        assert!(!p.try_pounce(7));
+
+        p.dizzy_left = 0;
+        assert!(p.try_pounce(7), "and can again once it passes");
+    }
+
+    #[test]
+    fn a_pounce_shakes_off_a_queued_head_shake() {
+        // game1.c:6859 - landing on something clears it.
+        let mut p = Player::spawn_at(0, 10);
+        p.pounce_ready = true;
+        p.is_falling = true;
+        p.queue_dizzy();
+        assert!(p.try_pounce(7));
+        assert!(!p.dizzy_queued);
+    }
+
+    #[test]
+    fn only_a_hard_recoil_counts_as_a_long_jump() {
+        // A creature gives 7 and a jump pad 40 (game1.c:6862-6866).
+        let mut p = Player::spawn_at(0, 10);
+        p.pounce_ready = true;
+        p.is_falling = true;
+        assert!(p.try_pounce(7));
+        assert!(!p.long_jumping, "an ordinary pounce is not a long jump");
+
+        let mut q = Player::spawn_at(0, 10);
+        q.pounce_ready = true;
+        q.is_falling = true;
+        assert!(q.try_pounce(40));
+        assert!(q.long_jumping, "a jump pad is");
+    }
+
+    #[test]
+    fn ten_plain_pounces_make_a_streak_and_anything_else_breaks_it() {
+        let mut p = Player::spawn_at(0, 10);
+        for i in 1..10 {
+            p.pounce_ready = true;
+            p.is_falling = true;
+            p.is_recoiling = false;
+            p.recoil_left = 0;
+            assert!(p.try_pounce(7));
+            assert_eq!(p.pounce_streak, i);
+        }
+        // The tenth wraps the streak back to zero.
+        p.pounce_ready = true;
+        p.is_falling = true;
+        p.is_recoiling = false;
+        p.recoil_left = 0;
+        assert!(p.try_pounce(7));
+        assert_eq!(p.pounce_streak, 0);
+
+        // A different recoil breaks a run in progress.
+        p.pounce_ready = true;
+        p.is_falling = true;
+        p.is_recoiling = false;
+        p.recoil_left = 0;
+        assert!(p.try_pounce(7));
+        assert_eq!(p.pounce_streak, 1);
+        p.pounce_ready = true;
+        p.is_falling = true;
+        p.is_recoiling = false;
+        p.recoil_left = 0;
+        assert!(p.try_pounce(40));
+        assert_eq!(p.pounce_streak, 0);
+    }
 
     #[test]
     fn a_script_holds_each_step_for_its_tick_count() {
