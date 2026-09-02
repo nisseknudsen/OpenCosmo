@@ -215,6 +215,11 @@ const SPR_MONUMENT: u16 = 64;
 const SPR_WORM_CRATE_SHARDS: u16 = 131;
 const SPR_SATELLITE_SHARDS: u16 = 144;
 const SPR_FALLING_FLOOR: u16 = 163;
+/// `SPR_BGHOST_EGG_SHARD_1`..`_4` are consecutive (sprite.h:98).
+const SPR_BGHOST_EGG_SHARD: u16 = 76;
+/// `SPR_PYRAMID` (sprite.h) and `ACT_STAR_FLOAT` (actor.h:45).
+const SPR_PYRAMID: u16 = 49;
+const ACT_STAR_FLOAT: u16 = 1;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
 const ACT_DOOR_BLUE: u16 = 11;
@@ -663,6 +668,8 @@ pub struct Enemy {
     pub score_award: u32,
     /// A speech bubble to raise, if its one-shot has not already fired.
     pub bubble: Option<u16>,
+    /// `NewExplosion` requests raised this tick.
+    pub explosions: Vec<(i32, i32)>,
 }
 
 impl Enemy {
@@ -751,6 +758,7 @@ impl Enemy {
             shards: Vec::new(),
             score_award: 0,
             bubble: None,
+            explosions: Vec::new(),
         }
     }
 
@@ -794,6 +802,7 @@ impl Enemy {
             shards: Vec::new(),
             score_award: 0,
             bubble: None,
+            explosions: Vec::new(),
         }
     }
 
@@ -1048,8 +1057,12 @@ fn tick_small_flame(e: &mut Enemy) {
 /// `ActFlamePulse` (game1.c:5545-5567). Burns through a sixteen-step frame
 /// table, then hides for thirty ticks before firing again.
 ///
-/// NOT PORTED: the smoke decoration emitted as the flame peaks.
+/// Smoke rises off the flame as it peaks.
 fn tick_flame_pulse(e: &mut Enemy) {
+    if e.frame == 8 {
+        e.decorations
+            .push((SPR_SMOKE, 6, e.x, e.y - 2, crate::effects::DIR8_NORTH, 1));
+    }
     const FRAMES: [usize; 16] = [0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 1, 0];
 
     if e.d1 == 0 {
@@ -1821,17 +1834,21 @@ fn tick_spitting_wall_plant(e: &mut Enemy) {
 /// `ActSentryRobot` (game1.c:4566-4633). Paces at half speed and, while
 /// the lights are on, occasionally stops to aim and fire at the player.
 ///
-/// NOT PORTED: the `areLightsActive` gate, which belongs to the light
-/// switch - unported, and its absence leaves the robot always willing to
-/// fire, which is the lights-on behavior.
-fn tick_sentry_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+fn tick_sentry_robot(
+    e: &mut Enemy,
+    player: &Player,
+    switches: &SwitchState,
+    level: &LevelJson,
+    data: &GameData,
+) {
     e.d3 = i32::from(e.d3 == 0);
     if e.d3 != 0 {
         return;
     }
 
-    // `GameRand() % 50 > 48` - one outcome in fifty.
-    if e.next_rand(50) > 48 && e.d4 == 0 {
+    // One outcome in fifty, and only while the lights are on
+    // (game1.c:4575).
+    if switches.lights_active && e.next_rand(50) > 48 && e.d4 == 0 {
         e.d4 = 10;
     }
 
@@ -1881,7 +1898,6 @@ fn tick_sentry_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
 /// level with or below it and within its column range; the `_PROX` variant
 /// never triggers on proximity at all (game1.c:3079).
 ///
-/// NOT PORTED: the shell shards.
 fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
     if e.d2 != 0 {
         e.frame = 2;
@@ -1908,6 +1924,19 @@ fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
         e.dead = true;
         e.spawns.push((ACT_BABY_GHOST, e.x, e.y));
         e.sounds.push(crate::sfx::snd::BGHOST_EGG_HATCH);
+        // Four pieces of shell, thrown outward (game1.c:3093-3096).
+        for (i, (dx, dy, dir)) in [
+            (0, -1, crate::effects::DIR8_NORTHWEST),
+            (1, -1, crate::effects::DIR8_NORTHEAST),
+            (0, 0, crate::effects::DIR8_EAST),
+            (1, 0, crate::effects::DIR8_WEST),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.decorations
+                .push((SPR_BGHOST_EGG_SHARD + i as u16, 2, e.x + dx, e.y + dy, dir, 5));
+        }
     }
 }
 
@@ -2060,9 +2089,6 @@ fn tick_splitting_platform(e: &mut Enemy, player: &Player) {
 /// the map change, which is why walking into one is stopped by ordinary
 /// tile collision rather than by any actor test.
 ///
-/// NOT PORTED: `UpdateDoors` restoring the tiles it overwrote when the
-/// matching head switch is pounced. The original saves them in data1..5
-/// for exactly that; without the switch the door simply stays locked.
 fn tick_door(e: &mut Enemy, switches: &SwitchState, level: &LevelJson) {
     if !e.west_free {
         // The original borrows `westfree` as its "already stamped" flag
@@ -2595,8 +2621,8 @@ fn tick_tulip_launcher(e: &mut Enemy) {
 /// player crosses them; `data1` distinguishes the episode-2 exit line,
 /// which is crossed from the other side.
 ///
-/// NOT PORTED: the episode-1 cliffhanger text the first kind shows. The
-/// line itself is ported so the trigger exists and can be hooked up.
+/// The episode-1 lines show a cliffhanger message; the third wins the
+/// game (`ShowE1CliffhangerMessage`, game2.c).
 fn tick_trigger_line(e: &mut Enemy, player: &Player) -> bool {
     if e.d2 != 0 {
         return false;
@@ -2610,6 +2636,24 @@ fn tick_trigger_line(e: &mut Enemy, player: &Player) -> bool {
         e.d2 = 1;
     }
     crossed
+}
+
+/// The cliffhanger text each `ACT_EP1_END_*` line shows (game2.c). The
+/// third has no message - it ends the episode.
+pub fn cliffhanger_lines(act_id: u16) -> Option<&'static [&'static str]> {
+    match act_id {
+        164 => Some(&[
+            " What's happening?  Is",
+            " Cosmo falling to his",
+            " doom?",
+        ]),
+        165 => Some(&[
+            " Is there no end to this",
+            " pit?  And what danger",
+            " awaits below?!",
+        ]),
+        _ => None,
+    }
 }
 
 /// `ActScooter` (game1.c:5303-5330). Left alone it bobs on the spot,
@@ -2678,8 +2722,21 @@ fn tick_bear_trap(e: &mut Enemy, player: &Player) -> u32 {
 /// that stands on its head and reaches up to nineteen cells, stopping at
 /// the ceiling. Both the robot and the beam hurt.
 ///
-/// NOT PORTED: the chain of explosions and stars it leaves when destroyed.
+/// Destroyed, it leaves a column of explosions and a star every four
+/// cells up its own beam (game1.c:3288-3293).
 fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
+    if e.d3 != 0 {
+        // Blasted: an explosion and a star every four cells up the beam
+        // it was casting (game1.c:3288-3293).
+        let mut i = 0;
+        while i < e.d3 {
+            e.explosions.push((e.x, e.y - i));
+            e.spawns.push((ACT_STAR_FLOAT, e.x, e.y - i));
+            i += 4;
+        }
+        e.dead = true;
+        return;
+    }
     e.d5 = i32::from(e.d5 == 0);
     e.d4 += 1;
 
@@ -2980,6 +3037,7 @@ pub fn tick_enemies(
     data: Res<GameData>,
     scroll: Res<crate::camera::Scroll>,
     mut switches: ResMut<SwitchState>,
+    mut cliffhangers: EventWriter<crate::flow::ShowCliffhanger>,
 ) {
     let Ok(player) = player_q.single() else {
         return;
@@ -3063,7 +3121,9 @@ pub fn tick_enemies(
             EnemyKind::FlyingWisp => tick_flying_wisp(&mut e),
             EnemyKind::Projectile => tick_projectile(&mut e, &scroll),
             EnemyKind::SpittingWallPlant => tick_spitting_wall_plant(&mut e),
-            EnemyKind::SentryRobot => tick_sentry_robot(&mut e, player, &level, &data),
+            EnemyKind::SentryRobot => {
+                tick_sentry_robot(&mut e, player, &switches, &level, &data)
+            }
             EnemyKind::BabyGhostEgg => tick_baby_ghost_egg(&mut e, player),
             EnemyKind::JumpingBullet => tick_jumping_bullet(&mut e),
             EnemyKind::WormCrate => tick_worm_crate(&mut e, &level, &data),
@@ -3102,9 +3162,11 @@ pub fn tick_enemies(
             EnemyKind::FrozenDN => tick_frozen_dn(&mut e),
             EnemyKind::SpeechBubble => tick_speech_bubble(&mut e, player),
             EnemyKind::TriggerLine => {
-                // The episode-end lines only mark the spot; the exit they
-                // stand for is driven by `ExitTrigger` in `actors.rs`.
-                tick_trigger_line(&mut e, player);
+                if tick_trigger_line(&mut e, player) {
+                    if let Some(lines) = cliffhanger_lines(e.act_id) {
+                        cliffhangers.write(crate::flow::ShowCliffhanger(lines));
+                    }
+                }
             }
             EnemyKind::Slime => tick_slime(&mut e, &scroll),
             // `nextDrawMode = DRAW_MODE_HIDDEN` and nothing else
@@ -3176,6 +3238,7 @@ pub fn spawn_queued_actors(
     let mut sounds: Vec<u16> = Vec::new();
     let mut shards: Vec<(u16, usize, i32, i32)> = Vec::new();
     let mut bubbles: Vec<(u16, i32, i32)> = Vec::new();
+    let mut explosions: Vec<(i32, i32)> = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
@@ -3195,6 +3258,9 @@ pub fn spawn_queued_actors(
         if e.score_award != 0 {
             score.0 += e.score_award;
             e.score_award = 0;
+        }
+        if !e.explosions.is_empty() {
+            explosions.append(&mut e.explosions);
         }
         if let Some(act) = e.bubble.take() {
             // The one-shot gate: which flag depends on what raised it.
@@ -3253,6 +3319,9 @@ pub fn spawn_queued_actors(
     }
     for number in sounds {
         sfx.write(crate::sfx::PlaySfx(number));
+    }
+    for (x, y) in explosions {
+        crate::effects::spawn_explosion(&mut commands, &effects, x, y);
     }
     for (act, x, y) in bubbles {
         crate::actors::spawn_one_actor(&mut commands, &asset_server, &data, act, x, y);
@@ -3374,7 +3443,7 @@ pub fn draw_force_field_beams(
 /// Cross-actor by nature - the destination is a different entity - so this
 /// is a system rather than a behavior tick.
 ///
-/// NOT PORTED: the sparkles and the "whoa" bubble.
+/// Sparkles and a first-time "whoa" go with the trip.
 pub fn run_transporters(
     mut state: ResMut<TransporterState>,
     mut player_q: Query<&mut Player>,
@@ -3450,7 +3519,7 @@ pub fn run_transporters(
 /// Cross-actor and player-state by nature, so a system rather than a
 /// behaviour tick.
 ///
-/// NOT PORTED: the "whoa" bubble on first use.
+/// A first ride raises a "whoa".
 pub fn run_pipes(
     mut player_q: Query<&mut Player>,
     pipes: Query<&Enemy>,
@@ -3580,9 +3649,14 @@ fn flips_vertically(e: &Enemy) -> bool {
 /// `ActPrize` (game1.c:4902-4928). Cycles `frame` up to `data5` and back
 /// to zero; `data4` halves the rate via the `data3` toggle.
 ///
-/// NOT PORTED: the sparkle decoration the original emits for single-frame
-/// prizes (needs `NewDecoration`).
+/// A single-frame prize sparkles instead of animating, which is what the
+/// original does for the ones with nothing to cycle (game1.c:4920).
 fn tick_prize(e: &mut Enemy) {
+    // Nothing to cycle means it sparkles instead (game1.c:4920).
+    if e.d5 <= 1 && e.next_rand(16) == 0 {
+        e.decorations
+            .push((SPR_SPARKLE_SHORT, 4, e.x, e.y, crate::effects::DIR8_NONE, 1));
+    }
     if e.d4 == 0 {
         e.frame += 1;
     } else {
@@ -4196,8 +4270,20 @@ fn tick_falling_floor(e: &mut Enemy, player: &Player, level: &LevelJson, data: &
 /// `ActPyramid` (game1.c:2657-2693). The floor-mounted variant is inert
 /// scenery; the ceiling-mounted one drops once the player walks beneath it.
 ///
-/// NOT PORTED: explosion propagation and the score/shard award.
+/// A blast three ticks earlier destroys it for 200 and a shard. The
+/// original notes that non-falling pyramids use a different function and
+/// so do not propagate the explosion; that asymmetry is kept.
 fn tick_pyramid(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) {
+    if e.d2 != 0 {
+        e.d2 -= 1;
+        if e.d2 == 0 {
+            e.explosions.push((e.x - 1, e.y + 1));
+            e.dead = true;
+            e.score_award += 200;
+            e.shards.push((SPR_PYRAMID, 0, e.x, e.y));
+            return;
+        }
+    }
     if e.d5 != 0 {
         return; // floor mounted - drawn flipped, no motion
     }
@@ -4658,6 +4744,94 @@ mod tests {
                  invisible"
             );
         }
+    }
+
+    #[test]
+    fn only_the_first_two_end_lines_have_something_to_say() {
+        // ACT_EP1_END_1 and _2 show a cliffhanger; _3 ends the episode
+        // instead and has no message (game2.c).
+        assert!(cliffhanger_lines(164).is_some());
+        assert!(cliffhanger_lines(165).is_some());
+        assert!(cliffhanger_lines(166).is_none(), "the third wins the game");
+        assert!(cliffhanger_lines(999).is_none());
+        for act in [164, 165] {
+            let lines = cliffhanger_lines(act).unwrap();
+            assert!(!lines.is_empty());
+            assert!(
+                lines.iter().all(|l| l.len() <= 26),
+                "a line would run through the frame edge"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sentry_robot_holds_its_fire_in_the_dark() {
+        // game1.c:4575 gates it on `areLightsActive`. Without that it
+        // shot at the player through an unlit room.
+        let (level, data) = world(&["................", "################"]);
+        let fired_under = |lights_active: bool| {
+            let mut switches = SwitchState::default();
+            switches.lights_active = lights_active;
+            let mut e = Enemy::default_for_test(EnemyKind::SentryRobot);
+            e.x = 8;
+            e.y = 0;
+            e.width_tiles = 1;
+            e.height_tiles = 1;
+            let mut p = Player::spawn_at(1, 0);
+            p.x = 1;
+            p.y = 0;
+            for _ in 0..4000 {
+                tick_sentry_robot(&mut e, &p, &switches, &level, &data);
+                if !e.spawns.is_empty() {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(fired_under(true), "it should fire with the lights on");
+        assert!(!fired_under(false), "and hold fire with them off");
+    }
+
+    #[test]
+    fn a_blasted_pyramid_pays_out_and_leaves_a_shard() {
+        let (level, data) = world(&["....", "####"]);
+        let p = Player::spawn_at(30, 0);
+        let mut e = Enemy::default_for_test(EnemyKind::Pyramid);
+        e.x = 1;
+        e.y = 0;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        // What the blast code sets.
+        e.d2 = 3;
+        for _ in 0..4 {
+            if e.dead {
+                break;
+            }
+            tick_pyramid(&mut e, &p, &level, &data);
+        }
+        assert!(e.dead, "three ticks after the blast it goes");
+        assert_eq!(e.score_award, 200, "game1.c's own figure");
+        assert_eq!(e.shards.len(), 1);
+        assert_eq!(e.explosions.len(), 1);
+    }
+
+    #[test]
+    fn a_blasted_beam_robot_goes_up_in_a_column() {
+        let (level, data) = world(&["....", "####"]);
+        let mut e = Enemy::default_for_test(EnemyKind::BeamRobot);
+        e.x = 1;
+        e.y = 20;
+        e.width_tiles = 1;
+        e.height_tiles = 1;
+        e.d3 = 12; // the beam length the blast recorded
+        tick_beam_robot(&mut e, &level, &data);
+        assert!(e.dead);
+        // One explosion and one star every four cells (game1.c:3289).
+        assert_eq!(e.explosions.len(), 3);
+        assert_eq!(e.spawns.len(), 3);
+        assert!(e.spawns.iter().all(|(a, ..)| *a == ACT_STAR_FLOAT));
+        let ys: Vec<i32> = e.explosions.iter().map(|(_, y)| *y).collect();
+        assert_eq!(ys, vec![20, 16, 12], "spaced up its own beam");
     }
 
     #[test]
@@ -5460,7 +5634,7 @@ mod tests {
             p.x = player_x;
             p.y = 1;
             for _ in 0..4000 {
-                tick_sentry_robot(&mut e, &p, &level, &data);
+                tick_sentry_robot(&mut e, &p, &SwitchState::default(), &level, &data);
                 if let Some((act, ..)) = e.spawns.first() {
                     return *act;
                 }

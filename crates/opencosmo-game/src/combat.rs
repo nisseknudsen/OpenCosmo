@@ -363,6 +363,19 @@ pub fn explosion_damage(
                 }
                 // A monument takes two blasts and pays out the largest
                 // single score in the game (game1.c:5361).
+                // A pyramid takes three ticks to go off, and a beam robot
+                // leaves a column of explosions up its own beam - both
+                // need their tick to run once more rather than being
+                // despawned here.
+                if enemy.kind == EnemyKind::Pyramid && enemy.d2 == 0 {
+                    enemy.d2 = 3;
+                    continue;
+                }
+                if enemy.kind == EnemyKind::BeamRobot && enemy.d3 == 0 {
+                    // d2 holds the beam length it was casting.
+                    enemy.d3 = enemy.d2.max(1);
+                    continue;
+                }
                 if enemy.kind == EnemyKind::FrozenDN {
                     crate::enemy_ai::smash_frozen_dn(&mut enemy);
                     continue;

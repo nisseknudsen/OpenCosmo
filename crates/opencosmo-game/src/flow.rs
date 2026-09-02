@@ -417,6 +417,52 @@ pub fn check_level_exit(
     }
 }
 
+/// A cliffhanger message raised by an episode-end trigger line.
+#[derive(Event)]
+pub struct ShowCliffhanger(pub &'static [&'static str]);
+
+#[derive(Component)]
+pub struct CliffhangerUi;
+
+/// `ShowE1CliffhangerMessage` (game2.c): the two lines Cosmo falls past on
+/// his way out of episode 1.
+pub fn show_cliffhanger(
+    mut commands: Commands,
+    mut events: EventReader<ShowCliffhanger>,
+    mut paused: ResMut<crate::help::Paused>,
+    hud: Res<crate::hud::HudAssets>,
+    ui_camera: Res<crate::screen::UiCamera>,
+    open: Query<Entity, With<CliffhangerUi>>,
+) {
+    let Some(ShowCliffhanger(lines)) = events.read().last() else {
+        return;
+    };
+    if !open.is_empty() {
+        return;
+    }
+    let mut frame = crate::panel::TextFrame::new(2, 8, 28, "", "Press any key to exit.");
+    for (i, line) in lines.iter().enumerate() {
+        frame = frame.text(4 + i as i32, line);
+    }
+    paused.0 = true;
+    frame.spawn(&mut commands, &hud, ui_camera.0, CliffhangerUi);
+}
+
+pub fn close_cliffhanger(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut paused: ResMut<crate::help::Paused>,
+    open: Query<Entity, With<CliffhangerUi>>,
+) {
+    if open.is_empty() || keys.get_just_pressed().next().is_none() {
+        return;
+    }
+    for entity in &open {
+        commands.entity(entity).despawn();
+    }
+    paused.0 = false;
+}
+
 /// Marks the between-levels frame.
 #[derive(Component)]
 pub struct IntermissionUi;
