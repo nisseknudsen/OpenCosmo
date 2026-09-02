@@ -215,12 +215,16 @@ const SPR_MONUMENT: u16 = 64;
 const SPR_WORM_CRATE_SHARDS: u16 = 131;
 const SPR_SATELLITE_SHARDS: u16 = 144;
 const SPR_FALLING_FLOOR: u16 = 163;
-/// `SPR_BGHOST_EGG_SHARD_1`..`_4` are consecutive (sprite.h:98).
-const SPR_BGHOST_EGG_SHARD: u16 = 76;
+/// `SPR_BGHOST_EGG_SHARD_1`..`_4`. These are *not* consecutive - the first
+/// two sit at 76-77 and the other two at 132-133 (sprite.h:98-99, 154-155).
+const SPR_BGHOST_EGG_SHARDS: [u16; 4] = [76, 77, 132, 133];
 /// `SPR_PYRAMID` (sprite.h) and `ACT_STAR_FLOAT` (actor.h:45).
 const SPR_PYRAMID: u16 = 49;
 /// `SPR_ROCKET` (sprite.h).
 const SPR_ROCKET: u16 = 188;
+const SPR_BOSS: u16 = 102;
+const SPR_FROZEN_DN: u16 = 221;
+const SPR_PARACHUTE_BALL_SPR: u16 = 86;
 const ACT_STAR_FLOAT: u16 = 1;
 
 /// `ACT_DOOR_*` (actor.h) sit four ids above their `ACT_HEAD_SWITCH_*`.
@@ -675,6 +679,8 @@ pub struct Enemy {
     pub explosions: Vec<(i32, i32)>,
     /// Set by the rocket while it is lifting a rider.
     pub carry_player: bool,
+    /// Score pop-ups to raise, as (x, y).
+    pub score_effects: Vec<(i32, i32)>,
 }
 
 impl Enemy {
@@ -765,6 +771,7 @@ impl Enemy {
             bubble: None,
             explosions: Vec::new(),
             carry_player: false,
+            score_effects: Vec::new(),
         }
     }
 
@@ -810,6 +817,7 @@ impl Enemy {
             bubble: None,
             explosions: Vec::new(),
             carry_player: false,
+            score_effects: Vec::new(),
         }
     }
 
@@ -1631,8 +1639,8 @@ fn tick_heart_plant(e: &mut Enemy, player: &Player) {
 /// regardless of where the player is, accelerating 1/2/4 rows on the way
 /// down and decelerating the same way back up.
 ///
-/// NOT PORTED: the impact sound, and the separate base sprite the original
-/// draws three rows below itself.
+/// NOT PORTED: the separate base sprite the original draws three rows
+/// below itself.
 fn tick_two_tons_crusher(e: &mut Enemy) {
     if e.d1 < 20 {
         e.d1 += 1;
@@ -1652,6 +1660,7 @@ fn tick_two_tons_crusher(e: &mut Enemy) {
             e.y += e.d3;
         } else {
             e.d2 = 2;
+            e.sounds.push(crate::sfx::snd::OBJECT_HIT);
         }
     }
 
@@ -1942,7 +1951,7 @@ fn tick_baby_ghost_egg(e: &mut Enemy, player: &Player) {
         .enumerate()
         {
             e.decorations
-                .push((SPR_BGHOST_EGG_SHARD + i as u16, 2, e.x + dx, e.y + dy, dir, 5));
+                .push((SPR_BGHOST_EGG_SHARDS[i], 2, e.x + dx, e.y + dy, dir, 5));
         }
     }
 }
@@ -2518,7 +2527,7 @@ fn tick_pusher_robot(e: &mut Enemy, player: &Player, level: &LevelJson, data: &G
 /// score in the game. Three, not two: the frame climbs 0 -> 1 -> 2 -> 3
 /// and only the step onto 3 topples it (game1.c:5381-5387).
 ///
-/// NOT PORTED: the two score effects it throws.
+
 fn tick_monument(e: &mut Enemy) {
     if e.d2 != 0 {
         e.dead = true;
@@ -2526,6 +2535,10 @@ fn tick_monument(e: &mut Enemy) {
             e.tile_writes.push((e.x + 1, e.y - i, TILE_EMPTY));
         }
         e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
+        e.score_award += 25_600;
+        // The pair of 12800 pop-ups either side of it (game1.c:5362-5363).
+        e.score_effects.push((e.x - 2, e.y - 9));
+        e.score_effects.push((e.x + 2, e.y - 9));
         // Six pieces of the pillar (game1.c:5346-5351).
         for (dx, dy) in [(0, -8), (0, -7), (0, -6), (0, 0), (1, 0), (2, 0)] {
             e.shards.push((SPR_MONUMENT, 3, e.x + dx, e.y + dy));
@@ -2571,12 +2584,28 @@ pub fn blast_monument(e: &mut Enemy) -> bool {
 
 /// `ActSatellite` (game1.c:4728-4770). Two blasts destroy it and it drops
 /// a hamburger.
-///
-/// NOT PORTED: the destruction sound.
 fn tick_satellite(e: &mut Enemy) {
     if e.d2 != 0 {
         e.d2 -= 1;
     }
+}
+
+/// A blast landing on a tulip launcher. The second one finishes it.
+pub fn blast_tulip_launcher(e: &mut Enemy) {
+    if e.d3 != 0 {
+        return;
+    }
+    e.d3 = 15;
+    e.d5 += 1;
+    if e.d5 != 2 {
+        return;
+    }
+    e.dead = true;
+    // The parachute ball it was holding, in pieces (game1.c:5422-5427).
+    for frame in [0, 2, 4, 9, 3] {
+        e.shards.push((SPR_PARACHUTE_BALL_SPR, frame, e.x + 2, e.y - 5));
+    }
+    e.sounds.push(crate::sfx::snd::DESTROY_SOLID);
 }
 
 /// A blast landing on a satellite.
@@ -2611,7 +2640,8 @@ pub fn blast_satellite(e: &mut Enemy) {
 /// `ActTulipLauncher` (game1.c:5395-5450). Throws a parachute ball, then
 /// sits for a hundred ticks before winding up again.
 ///
-/// NOT PORTED: being destroyed by two blasts.
+/// Two blasts destroy it, throwing the ball it was about to launch
+/// (game1.c:5418-5430).
 fn tick_tulip_launcher(e: &mut Enemy) {
     /// game1.c:5397 - the wind-up, as frame numbers.
     const LAUNCH_FRAMES: [usize; 5] = [0, 2, 1, 0, 1];
@@ -2807,9 +2837,8 @@ fn tick_beam_robot(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 /// ported, so only the death timer is kept - held in `fall_time`, which
 /// leaves the collision flags meaning what they say.
 ///
-/// NOT PORTED: the boss music, the speech bubble, the smoke, the shards,
-/// and the parachute balls the harder build throws. The damage sound is
-/// raised by `pounce_boss` rather than here.
+/// NOT PORTED: the boss music, and the parachute balls the harder build
+/// throws. The damage sound is raised by `pounce_boss` rather than here.
 fn tick_boss(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData) -> bool {
     /// game1.c:5590 - the bob, as per-tick row offsets.
     const Y_JUMP: [i32; 14] = [2, 2, 1, 0, -1, -2, -2, -2, -2, -1, 0, 1, 2, 2];
@@ -2827,6 +2856,12 @@ fn tick_boss(e: &mut Enemy, player: &Player, level: &LevelJson, data: &GameData)
             e.y -= 1;
         }
         e.weighted = false;
+        if e.fall_time < 40 && e.fall_time % 3 == 0 {
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x, e.y, crate::effects::DIR8_NORTHWEST, 1));
+            e.decorations
+                .push((SPR_SMOKE, 6, e.x + 3, e.y, crate::effects::DIR8_NORTHEAST, 1));
+        }
         if e.fall_time == 1 || e.y <= 0 {
             e.dead = true;
             return true; // won
@@ -2955,6 +2990,11 @@ pub fn pounce_boss(e: &mut Enemy) {
     }
     e.d5 += 1;
     e.sounds.push(crate::sfx::snd::BOSS_DAMAGE);
+    e.bubble = Some(ACT_SPEECH_WHOA);
+    if e.d5 == 4 {
+        // It sheds a piece on the fourth hit (game1.c:7373).
+        e.shards.push((SPR_BOSS, 1, e.x, e.y - 4));
+    }
     if e.d1 != 2 {
         e.d1 = 2;
         e.d2 = 31;
@@ -2967,9 +3007,8 @@ pub fn pounce_boss(e: &mut Enemy) {
 /// `ActFrozenDN` (game1.c:5454-5520). Smashed out of its ice, then rises
 /// through three timed phases.
 ///
-/// NOT PORTED: the shards, the smoke, and the rescue message it ends on -
-/// this is episode 2's closing set piece and the message needs the text
-/// frame wiring.
+/// NOT PORTED: the rescue message it ends on, which belongs with the
+/// episode-2 ending rather than with the actor.
 fn tick_frozen_dn(e: &mut Enemy) {
     match e.d1 {
         0 => {}
@@ -3000,6 +3039,13 @@ pub fn smash_frozen_dn(e: &mut Enemy) {
         e.d1 = 1;
         e.x += 1;
         e.sounds.push(crate::sfx::snd::SMASH);
+        // Six pieces of ice (game1.c:5461-5466).
+        for (frame, dx, dy) in [
+            (6, 0, -6), (7, 4, 0), (8, 0, -5),
+            (9, 0, -4), (10, 5, -6), (11, 5, -4),
+        ] {
+            e.shards.push((SPR_FROZEN_DN, frame, e.x + dx, e.y + dy));
+        }
     }
 }
 
@@ -3262,6 +3308,7 @@ pub fn spawn_queued_actors(
     let mut shards: Vec<(u16, usize, i32, i32)> = Vec::new();
     let mut bubbles: Vec<(u16, i32, i32)> = Vec::new();
     let mut explosions: Vec<(i32, i32)> = Vec::new();
+    let mut score_effects: Vec<(i32, i32)> = Vec::new();
     for mut e in &mut query {
         if !e.spawns.is_empty() {
             requests.append(&mut e.spawns);
@@ -3284,6 +3331,9 @@ pub fn spawn_queued_actors(
         }
         if !e.explosions.is_empty() {
             explosions.append(&mut e.explosions);
+        }
+        if !e.score_effects.is_empty() {
+            score_effects.append(&mut e.score_effects);
         }
         if e.carry_player {
             e.carry_player = false;
@@ -3356,6 +3406,9 @@ pub fn spawn_queued_actors(
     }
     for number in sounds {
         sfx.write(crate::sfx::PlaySfx(number));
+    }
+    for (x, y) in score_effects {
+        crate::effects::spawn_score_effect(&mut commands, &effects, 12_800, x, y);
     }
     for (x, y) in explosions {
         crate::effects::spawn_explosion(&mut commands, &effects, x, y);

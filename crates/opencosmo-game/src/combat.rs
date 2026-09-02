@@ -381,9 +381,13 @@ pub fn explosion_damage(
                     continue;
                 }
                 if enemy.kind == EnemyKind::Monument {
-                    if crate::enemy_ai::blast_monument(&mut enemy) {
-                        score.0 += 25600;
-                    }
+                    // The award is raised by the monument's own tick now,
+                    // alongside its score pop-ups.
+                    crate::enemy_ai::blast_monument(&mut enemy);
+                    continue;
+                }
+                if enemy.kind == EnemyKind::TulipLauncher {
+                    crate::enemy_ai::blast_tulip_launcher(&mut enemy);
                     continue;
                 }
                 if enemy.kind == EnemyKind::Satellite {
