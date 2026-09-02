@@ -338,7 +338,13 @@ pub fn explosion_damage(
             // instance, can only be killed this way (it appears in the
             // shard/destruction switch at game1.c:6955-7010 but never
             // calls TryPounce). Floating collectibles are the exception.
-            if enemy.dead || enemy.kind == EnemyKind::Prize {
+            // Prizes and inert furniture are not creatures. A barrel is
+            // destroyed by `blast_containers`, which knows to release what
+            // is inside it; killing it here would swallow the contents.
+            if enemy.dead
+                || enemy.kind == EnemyKind::Prize
+                || enemy.kind == EnemyKind::Inert
+            {
                 continue;
             }
             if rects_overlap(

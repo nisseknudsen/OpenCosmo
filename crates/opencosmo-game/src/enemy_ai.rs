@@ -181,6 +181,15 @@ pub enum EnemyKind {
     /// `ActSpeechBubble` (game1.c:5290-5310) - the one-shot "WHOA!" and
     /// friends the player says the first time they meet something.
     SpeechBubble,
+    /// No behavior of its own - it exists only to be fallen.
+    ///
+    /// `ProcessActor` applies gravity to *any* actor flagged weighted,
+    /// before and regardless of its tick function (game1.c:7868). Barrels,
+    /// baskets, loose bombs and dropped prizes have no ported behavior, so
+    /// nothing was running that pass on them and they hung wherever the
+    /// map placed them - including the power-up sitting above the pedestal
+    /// in A1, which is meant to fall onto it.
+    Inert,
 }
 
 /// `ACT_SPEECH_*` (actor.h:271-282).
@@ -1529,8 +1538,9 @@ fn tick_spark(e: &mut Enemy, level: &LevelJson, data: &GameData) {
 ///
 fn tick_vertical_mover(e: &mut Enemy, level: &LevelJson, data: &GameData) {
     e.frame = usize::from(e.frame == 0);
-    // The original plays this every tick the blade is on screen; the
-    // priority gate collapses the repeats (game1.c:2264).
+    // Every tick the blade is on screen, which is what gives it its drone
+    // (game1.c:2264). `tick_enemies` has already established visibility
+    // by the time a behavior runs, so there is no second test here.
     e.sounds.push(crate::sfx::snd::SAW_BLADE_MOVE);
 
     if e.d1 != DIR2_SOUTH {
@@ -3239,6 +3249,8 @@ pub fn tick_enemies(
             }
             EnemyKind::FrozenDN => tick_frozen_dn(&mut e),
             EnemyKind::SpeechBubble => tick_speech_bubble(&mut e, player),
+            // Gravity has already run above; there is nothing else to do.
+            EnemyKind::Inert => {}
             EnemyKind::TriggerLine => {
                 if tick_trigger_line(&mut e, player) {
                     if let Some(lines) = cliffhanger_lines(e.act_id) {
@@ -4215,15 +4227,21 @@ fn tick_clam_plant(e: &mut Enemy) {
 ///
 fn tick_reciprocating_spikes(e: &mut Enemy) {
     e.d2 += 1;
-    e.sounds.push(crate::sfx::snd::SPIKES_MOVE);
     if e.d2 == 20 {
         e.d2 = 0;
     }
 
+    // The sound fires on the two frames the spikes change direction, not
+    // every tick (game1.c:2378, 2383). Asking every tick made every set of
+    // spikes in the level hold the audio channel permanently: the priority
+    // gate accepts an equal-priority request, so the effect restarted 18
+    // times a second and nothing else was ever heard.
     if e.frame == 0 && e.d2 == 0 {
         e.d1 = 0;
+        e.sounds.push(crate::sfx::snd::SPIKES_MOVE);
     } else if e.frame == 2 && e.d2 == 0 {
         e.d1 = 1;
+        e.sounds.push(crate::sfx::snd::SPIKES_MOVE);
     } else if e.d1 != 0 {
         e.frame = e.frame.saturating_sub(1);
     } else if e.frame < 2 {
@@ -4874,6 +4892,27 @@ mod tests {
                  place - add it to RUNTIME_SPAWNED_SPRITES or it will spawn \
                  invisible"
             );
+        }
+    }
+
+    #[test]
+    fn a_weighted_actor_with_no_behaviour_still_gets_one_so_it_can_fall() {
+        // The original applies gravity to any weighted actor before its
+        // tick function (game1.c:7868), so an actor having no behaviour of
+        // its own does not exempt it. Barrels, baskets, loose bombs and
+        // dropped prizes all rely on this - the power-up above the A1
+        // pedestal is placed eight rows over the cap it is meant to land
+        // on, and hangs there without it.
+        use opencosmo_assets::actor_flags::flags_for;
+        for act in [29, 56, 57, 34, 197] {
+            assert!(flags_for(act).weighted, "ACT {act} should be weighted");
+            // No behaviour of its own...
+            assert!(behavior_for(act).is_none(), "ACT {act}");
+        }
+        // ...and the float prizes must *not* be swept up by this: they are
+        // called float for a reason.
+        for act in [1, 159, 160, 225, 228, 231] {
+            assert!(!flags_for(act).weighted, "ACT {act} must keep floating");
         }
     }
 

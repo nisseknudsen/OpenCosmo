@@ -576,7 +576,17 @@ pub fn spawn_one_actor(
     // and frame from here on (crate::enemy_ai). They keep whatever
     // Hazard/Collectible markers apply, but must not also be given the
     // generic `Walker`, or two systems would fight over their position.
-    let behavior = crate::enemy_ai::behavior_for(act_type);
+    // An actor with no behavior of its own still falls if it is flagged
+    // weighted: the original applies gravity in ProcessActor before it
+    // reaches the tick function at all (game1.c:7868). Barrels, baskets,
+    // loose bombs and dropped prizes have no behavior, so nothing ran that
+    // pass on them and they hung wherever the map put them.
+    let act_flags = opencosmo_assets::actor_flags::flags_for(act_type);
+    let behavior = crate::enemy_ai::behavior_for(act_type).or_else(|| {
+        act_flags
+            .weighted
+            .then_some((crate::enemy_ai::EnemyKind::Inert, [0; 5]))
+    });
     if let Some((kind, init)) = behavior {
         let frames: Vec<Handle<Image>> = manifest
             .frames
