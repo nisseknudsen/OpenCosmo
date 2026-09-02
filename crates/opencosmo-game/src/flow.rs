@@ -204,6 +204,7 @@ pub fn restart_level(
         let (sx, sy) = level::find_player_start(&level);
         player.x = sx as i32;
         player.y = sy as i32;
+        player.reset_transient_state();
     }
     player.is_falling = true;
     player.jump_time = 0;
@@ -666,6 +667,7 @@ pub fn enter_level(
     let (sx, sy) = level::find_player_start(&level_json);
     player.x = sx as i32;
     player.y = sy as i32;
+    player.reset_transient_state();
     *checkpoint = Checkpoint::capture(&score, &stars, &player);
     player.is_falling = true;
     player.jump_time = 0;

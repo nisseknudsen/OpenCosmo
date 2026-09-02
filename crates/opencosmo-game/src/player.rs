@@ -282,6 +282,22 @@ impl Player {
         }
     }
 
+    /// Clears everything that should not survive a level change. Riding a
+    /// pipe left the player hidden and immune on the next level, which
+    /// looked like spawning invisible at a random spot - `InitializeLevel`
+    /// resets all of this (game1.c:10441-10443).
+    pub fn reset_transient_state(&mut self) {
+        self.in_pipe = false;
+        self.scooter = 0;
+        self.push = None;
+        self.held_ticks = 0;
+        self.block_action = false;
+        self.clear_dizzy();
+        self.is_recoiling = false;
+        self.recoil_left = 0;
+        self.long_jumping = false;
+    }
+
     /// `SET_PLAYER_DIZZY` (game1.c:246).
     pub fn queue_dizzy(&mut self) {
         self.dizzy_queued = true;
@@ -1167,10 +1183,15 @@ pub fn update_death(
     }
 }
 
-/// `PLAYER_HIDDEN` (player.h:54): a player riding a pipe is not drawn.
+/// `PLAYER_HIDDEN` (player.h:54) is the *push's* forced frame, not a
+/// property of being in a pipe: the player is only invisible while a
+/// corner is actually carrying them (game1.c:7620). Hiding them for as
+/// long as `in_pipe` was set left them invisible whenever they entered a
+/// pipe and never reached a corner - and, until the level change cleared
+/// it, on every level after that too.
 pub fn sync_player_visibility(mut query: Query<(&Player, &mut Visibility)>) {
     for (p, mut vis) in &mut query {
-        let want = if p.in_pipe {
+        let want = if p.in_pipe && p.push.is_some() {
             Visibility::Hidden
         } else {
             Visibility::Inherited
@@ -1424,6 +1445,51 @@ pub fn apply_player_frame(mut query: Query<(&Player, &mut Sprite)>, frames: Res<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_level_change_clears_the_states_a_level_does_not_carry() {
+        // Riding a pipe left the player hidden and immune on the next
+        // level, which reads as spawning invisible somewhere random.
+        let mut p = Player::spawn_at(10, 10);
+        p.in_pipe = true;
+        p.scooter = 3;
+        p.set_push(1, 0, 100, 2, false, false);
+        p.held_ticks = 5;
+        p.block_action = true;
+        p.queue_dizzy();
+        p.is_recoiling = true;
+        p.recoil_left = 9;
+
+        p.reset_transient_state();
+
+        assert!(!p.in_pipe);
+        assert_eq!(p.scooter, 0);
+        assert!(p.push.is_none());
+        assert_eq!(p.held_ticks, 0);
+        assert!(!p.block_action);
+        assert_eq!(p.dizzy_left, 0);
+        assert!(!p.dizzy_queued);
+        assert!(!p.is_recoiling);
+        assert_eq!(p.recoil_left, 0);
+        // Things a level *does* carry are left alone.
+        assert_eq!(p.health, Player::spawn_at(0, 0).health);
+    }
+
+    #[test]
+    fn only_a_carried_player_is_hidden() {
+        // PLAYER_HIDDEN is the push's forced frame, not a property of
+        // being in a pipe (game1.c:7620). Being in one without a corner
+        // carrying you must still draw you.
+        let mut p = Player::spawn_at(10, 10);
+        p.in_pipe = true;
+        assert!(p.push.is_none());
+        assert!(
+            !(p.in_pipe && p.push.is_some()),
+            "in a pipe but not being carried: still visible"
+        );
+        p.set_push(1, 0, 100, 2, false, false);
+        assert!(p.in_pipe && p.push.is_some(), "carried: hidden");
+    }
 
     fn flat_world() -> (crate::data::LevelJson, GameData) {
         // Open air with a floor, so a scooter can fly.
