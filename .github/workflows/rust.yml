@@ -4,7 +4,9 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    # Also on pull requests into an integration branch, so work landing
+    # there is checked before it reaches the one aimed at main.
+    branches: [ "main", "epic/**" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +18,14 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    # Bevy needs these on Linux even for a headless build: the audio and
+    # input backends link against them. Without them `alsa-sys` fails in
+    # its own build script, before any of this project is compiled.
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libasound2-dev libudev-dev
     - name: Build
       run: cargo build --verbose
     - name: Run tests
