@@ -69,6 +69,9 @@ pub const RUNTIME_SPAWNED_SPRITES: &[u16] = &[
     245, // SPR_SPEECH_UMPH
     246, // SPR_SPEECH_WOW_50K
     19,  // SPR_SCOOTER_EXHAUST - emitted only while riding one
+    // SPR_BGHOST_EGG_SHARD_1.._4 - shell, never placed. Note these are
+    // *not* consecutive (sprite.h:98-99, 154-155).
+    76, 77, 132, 133,
 ];
 const MAX_ACTOR_TYPES: usize = 400; // generous upper bound on ACT_*/SPR_* ids
 const MAX_FRAMES_PER_TYPE: usize = 24;

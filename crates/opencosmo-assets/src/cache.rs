@@ -6,8 +6,9 @@
 use anyhow::Result;
 use std::path::Path;
 
-/// Bump this whenever decode/convert logic changes, to invalidate old caches.
-pub const CONVERTER_VERSION: u32 = 17;
+/// Bump this whenever decode/convert *logic* changes. The forced sprite
+/// lists are hashed in separately, so adding one of those needs no bump.
+pub const CONVERTER_VERSION: u32 = 18;
 
 const STAMP_FILE: &str = ".cache-stamp";
 
@@ -15,6 +16,18 @@ pub fn fingerprint(source_bytes: &[u8]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(source_bytes);
     hasher.update(&CONVERTER_VERSION.to_le_bytes());
+    // The lists of sprites forced into the conversion are part of what the
+    // output *is*, so they belong in the fingerprint. Leaving them out
+    // meant adding a sprite silently did nothing until someone remembered
+    // to bump the version by hand - which twice, nobody did.
+    for list in [
+        crate::convert::EFFECT_SPRITES,
+        crate::convert::RUNTIME_SPAWNED_SPRITES,
+    ] {
+        for id in list {
+            hasher.update(&id.to_le_bytes());
+        }
+    }
     hasher.finalize().to_hex().to_string()
 }
 
