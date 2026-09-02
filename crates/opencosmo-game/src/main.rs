@@ -212,6 +212,7 @@ fn main() {
         .init_resource::<demo::Demo>()
         .add_event::<savegame::OpenSlotPrompt>()
         .add_event::<savegame::RestoredGame>()
+        .add_event::<flow::ShowCliffhanger>()
         .add_event::<hints::ShowHint>()
         .init_resource::<devmenu::WarpCursor>()
         .add_event::<flow::RestartLevel>()
@@ -462,6 +463,8 @@ fn main() {
                 flow::enter_level,
                 // After enter_level, so the intro is raised for the level
                 // that was just loaded rather than the one being left.
+                flow::show_cliffhanger,
+                flow::close_cliffhanger,
                 flow::show_level_intro,
                 flow::close_level_intro,
             )

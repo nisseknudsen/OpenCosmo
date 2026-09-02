@@ -123,6 +123,7 @@ pub const DIR8: [(i32, i32); 9] = [
 pub const DIR8_NONE: usize = 0;
 pub const DIR8_NORTH: usize = 1;
 pub const DIR8_NORTHEAST: usize = 2;
+pub const DIR8_EAST: usize = 3;
 pub const DIR8_SOUTH: usize = 5;
 pub const DIR8_SOUTHWEST: usize = 6;
 pub const DIR8_WEST: usize = 7;
